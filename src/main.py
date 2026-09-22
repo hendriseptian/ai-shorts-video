@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from typing import Optional
+import json
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from workers import WorkerEntrypoint, Response
 
 from engines.story_engine import StoryEngine, StoryEngineError
 from engines.image_prompt_engine import ImagePromptEngine, ImagePromptEngineError
@@ -19,216 +18,298 @@ from engines.video_generation_engine import (
     VideoGenerationConfigurationError,
 )
 
-
 APP_NAME = "AI Shorts Video API"
-APP_VERSION = "0.5.0"
-
-app = FastAPI(
-    title=APP_NAME,
-    version=APP_VERSION,
-    description="Cloudflare Python Worker backend for the Miko AI Shorts pipeline.",
-    docs_url="/docs",
-    redoc_url="/redoc",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+APP_VERSION = "0.6.0"
 
 story_engine = StoryEngine()
 image_prompt_engine = ImagePromptEngine()
 
 
-class StoryGenerateRequest(BaseModel):
-    category: Optional[str] = None
-    core_value: Optional[str] = None
-    location: Optional[str] = None
-    supporting_character: Optional[str] = None
-    main_object: Optional[str] = None
-    duration: int = Field(default=60, ge=10, le=180)
-    language: str = Field(default="id", min_length=2, max_length=5)
-    episode_id: Optional[str] = None
+class Default(WorkerEntrypoint):
+    """Native Cloudflare Python Worker without FastAPI/Pydantic/ASGI."""
 
+    def _headers(self):
+        return {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Content-Type": "application/json; charset=utf-8",
+        }
 
-class ImagePromptRequest(BaseModel):
-    story: dict
-    episode_id: Optional[str] = None
-    language: str = Field(default="id", min_length=2, max_length=5)
-
-
-class ImageGenerateRequest(BaseModel):
-    prompt: str
-    negative_prompt: str = ""
-    reference_image: str
-    width: int = Field(default=576, ge=256, le=1920)
-    height: int = Field(default=1024, ge=256, le=1920)
-    seed: Optional[int] = None
-    scene_number: Optional[int] = None
-
-
-class VideoGenerateRequest(BaseModel):
-    image: str
-    motion_prompt: str = ""
-    duration: int = Field(default=5, ge=1, le=20)
-    resolution: str = Field(default="720p")
-    fps: int = Field(default=24)
-    draft: bool = Field(default=True)
-    seed: Optional[int] = None
-    scene_number: Optional[int] = None
-
-
-@app.get("/")
-async def root():
-    return {
-        "name": APP_NAME,
-        "version": APP_VERSION,
-        "story_engine": "ready",
-        "image_prompt_engine": "ready",
-        "image_generation_engine": "ready",
-        "video_generation_engine": "ready",
-        "video_provider": "cloudflare-workers-ai",
-        "video_model": "pruna/p-video",
-        "image_provider": "cloudflare-workers-ai",
-        "image_model": "@cf/black-forest-labs/flux-2-klein-4b",
-        "character_identity": "MIKO_CAT",
-        "character_reference": "required",
-    }
-
-
-@app.get("/health")
-async def health():
-    return {
-        "status": "healthy",
-        "story_engine": "ready",
-        "image_prompt_engine": "ready",
-        "image_generation_engine": "ready",
-        "video_generation_engine": "ready",
-        "video_provider": "cloudflare-workers-ai",
-        "video_model": "pruna/p-video",
-        "image_provider": "cloudflare-workers-ai",
-        "image_model": "@cf/black-forest-labs/flux-2-klein-4b",
-        "character_identity": "MIKO_CAT",
-        "character_reference": "required",
-        "platform": "cloudflare-python-workers",
-    }
-
-
-@app.get("/bibles")
-async def bibles():
-    return story_engine.get_bibles()
-
-
-@app.get("/story/options")
-async def story_options():
-    return story_engine.get_options()
-
-
-@app.post("/story/generate")
-async def generate_story(request: StoryGenerateRequest):
-    try:
-        data = story_engine.generate_story(
-            category=request.category,
-            core_value=request.core_value,
-            location=request.location,
-            supporting_character=request.supporting_character,
-            main_object=request.main_object,
-            duration=request.duration,
-            language=request.language,
-            episode_id=request.episode_id,
+    def _json(self, data, status=200):
+        return Response(
+            json.dumps(data, ensure_ascii=False),
+            status=status,
+            headers=self._headers(),
         )
-        return {"success": True, "data": data}
-    except StoryEngineError as exc:
-        return {"success": False, "error": str(exc)}
 
+    async def _read_json(self, request):
+        try:
+            body = await request.json()
+        except Exception as exc:
+            raise ValueError(f"Invalid JSON body: {exc}") from exc
 
-@app.post("/story/image-prompts")
-async def generate_image_prompts(request: ImagePromptRequest):
-    try:
-        data = image_prompt_engine.generate_for_story(request.story)
-        return {"success": True, **data}
-    except ImagePromptEngineError as exc:
-        return {"success": False, "error": str(exc)}
-    except Exception as exc:
-        return {"success": False, "error": f"Unexpected image prompt error: {exc}"}
+        if not isinstance(body, dict):
+            raise ValueError("Request body must be a JSON object.")
 
+        return body
 
-@app.post("/images/generate")
-async def generate_image(http_request: Request, request: ImageGenerateRequest):
-    try:
-        env = http_request.scope.get("env")
-        if env is None or getattr(env, "AI", None) is None:
-            raise ImageGenerationEngineError("Workers AI binding is unavailable.")
+    @staticmethod
+    def _optional_string(body, key):
+        value = body.get(key)
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError(f"{key} must be a string.")
+        value = value.strip()
+        return value or None
 
-        engine = ImageGenerationEngine(env.AI)
+    @staticmethod
+    def _required_string(body, key):
+        value = body.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{key} is required.")
+        return value.strip()
+
+    @staticmethod
+    def _int_value(body, key, default, minimum=None, maximum=None):
+        value = body.get(key, default)
+        try:
+            value = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key} must be an integer.") from exc
+
+        if minimum is not None and value < minimum:
+            raise ValueError(f"{key} must be >= {minimum}.")
+        if maximum is not None and value > maximum:
+            raise ValueError(f"{key} must be <= {maximum}.")
+        return value
+
+    @staticmethod
+    def _optional_int(body, key):
+        value = body.get(key)
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key} must be an integer.") from exc
+
+    async def _story_generate(self, request):
+        body = await self._read_json(request)
+
+        language = body.get("language", "id")
+        if not isinstance(language, str) or not 2 <= len(language) <= 5:
+            raise ValueError("language must be a string with 2-5 characters.")
+
+        try:
+            data = story_engine.generate_story(
+                category=self._optional_string(body, "category"),
+                core_value=self._optional_string(body, "core_value"),
+                location=self._optional_string(body, "location"),
+                supporting_character=self._optional_string(
+                    body, "supporting_character"
+                ),
+                main_object=self._optional_string(body, "main_object"),
+                duration=self._int_value(
+                    body, "duration", 60, minimum=10, maximum=180
+                ),
+                language=language,
+                episode_id=self._optional_string(body, "episode_id"),
+            )
+            return self._json({"success": True, "data": data})
+        except StoryEngineError as exc:
+            return self._json({"success": False, "error": str(exc)}, 400)
+
+    async def _image_prompts(self, request):
+        body = await self._read_json(request)
+        story = body.get("story")
+
+        if not isinstance(story, dict):
+            raise ValueError("story must be a JSON object.")
+
+        try:
+            data = image_prompt_engine.generate_for_story(story)
+            return self._json({"success": True, **data})
+        except ImagePromptEngineError as exc:
+            return self._json({"success": False, "error": str(exc)}, 400)
+        except Exception as exc:
+            return self._json(
+                {
+                    "success": False,
+                    "error": f"Unexpected image prompt error: {exc}",
+                },
+                500,
+            )
+
+    async def _image_generate(self, request):
+        body = await self._read_json(request)
+
+        ai = getattr(self.env, "AI", None)
+        if ai is None:
+            raise ImageGenerationEngineError(
+                "Workers AI binding is unavailable."
+            )
+
+        engine = ImageGenerationEngine(ai)
+
         data = await engine.generate(
-            prompt=request.prompt,
-            negative_prompt=request.negative_prompt,
-            reference_image=request.reference_image,
-            width=request.width,
-            height=request.height,
-            seed=request.seed,
-            scene_number=request.scene_number,
+            prompt=self._required_string(body, "prompt"),
+            negative_prompt=body.get("negative_prompt", ""),
+            reference_image=self._required_string(body, "reference_image"),
+            width=self._int_value(
+                body, "width", 576, minimum=256, maximum=1920
+            ),
+            height=self._int_value(
+                body, "height", 1024, minimum=256, maximum=1920
+            ),
+            seed=self._optional_int(body, "seed"),
+            scene_number=self._optional_int(body, "scene_number"),
         )
-        return data
-    except ImageGenerationEngineError as exc:
-        return {"success": False, "error": str(exc)}
-    except Exception as exc:
-        return {"success": False, "error": f"Image generation error: {exc}"}
 
+        return self._json(data)
 
-@app.post("/videos/generate")
-async def generate_video(http_request: Request, request: VideoGenerateRequest):
-    try:
-        env = http_request.scope.get("env")
-        if env is None or getattr(env, "AI", None) is None:
+    async def _video_generate(self, request):
+        body = await self._read_json(request)
+
+        ai = getattr(self.env, "AI", None)
+        if ai is None:
             raise VideoGenerationConfigurationError(
                 "Workers AI binding is unavailable."
             )
 
-        engine = VideoGenerationEngine(env.AI)
+        resolution = body.get("resolution", "720p")
+        if not isinstance(resolution, str):
+            raise ValueError("resolution must be a string.")
+
+        fps = self._int_value(body, "fps", 24, minimum=1, maximum=60)
+
+        draft = body.get("draft", True)
+        if not isinstance(draft, bool):
+            draft = bool(draft)
+
+        engine = VideoGenerationEngine(ai)
+
         data = await engine.generate(
-            image=request.image,
-            motion_prompt=request.motion_prompt,
-            duration=request.duration,
-            resolution=request.resolution,
-            fps=request.fps,
-            draft=request.draft,
-            seed=request.seed,
-            scene_number=request.scene_number,
+            image=self._required_string(body, "image"),
+            motion_prompt=body.get("motion_prompt", ""),
+            duration=self._int_value(
+                body, "duration", 5, minimum=1, maximum=20
+            ),
+            resolution=resolution,
+            fps=fps,
+            draft=draft,
+            seed=self._optional_int(body, "seed"),
+            scene_number=self._optional_int(body, "scene_number"),
         )
-        return data
-    except (
-        VideoGenerationError,
-        VideoGenerationInputError,
-        VideoGenerationConfigurationError,
-    ) as exc:
-        return {"success": False, "error": str(exc)}
-    except Exception as exc:
-        return {"success": False, "error": f"Video generation error: {exc}"}
+
+        return self._json(data)
+
+    async def fetch(self, request):
+        try:
+            if request.method == "OPTIONS":
+                return Response("", status=204, headers=self._headers())
+
+            parsed = urlparse(str(request.url))
+            path = parsed.path.rstrip("/") or "/"
+            method = request.method.upper()
+
+            if method == "GET" and path == "/":
+                return self._json({
+                    "name": APP_NAME,
+                    "version": APP_VERSION,
+                    "platform": "cloudflare-python-workers",
+                    "architecture": "native-worker",
+                    "story_engine": "ready",
+                    "image_prompt_engine": "ready",
+                    "image_generation_engine": "ready",
+                    "video_generation_engine": "ready",
+                    "video_provider": "cloudflare-workers-ai",
+                    "video_model": "pruna/p-video",
+                    "image_provider": "cloudflare-workers-ai",
+                    "image_model": "@cf/black-forest-labs/flux-2-klein-4b",
+                    "character_identity": "MIKO_CAT",
+                    "character_reference": "required",
+                })
+
+            if method == "GET" and path == "/health":
+                return self._json({
+                    "status": "healthy",
+                    "story_engine": "ready",
+                    "image_prompt_engine": "ready",
+                    "image_generation_engine": "ready",
+                    "video_generation_engine": "ready",
+                    "video_provider": "cloudflare-workers-ai",
+                    "video_model": "pruna/p-video",
+                    "image_provider": "cloudflare-workers-ai",
+                    "image_model": "@cf/black-forest-labs/flux-2-klein-4b",
+                    "character_identity": "MIKO_CAT",
+                    "character_reference": "required",
+                    "platform": "cloudflare-python-workers",
+                    "architecture": "native-worker",
+                })
+
+            if method == "GET" and path == "/bibles":
+                return self._json(story_engine.get_bibles())
+
+            if method == "GET" and path == "/story/options":
+                return self._json(story_engine.get_options())
+
+            if method == "GET" and path == "/pipeline/status":
+                return self._json({
+                    "story_engine": "ready",
+                    "image_prompt_engine": "ready",
+                    "image_generation_engine": "ready",
+                    "video_generation_engine": "ready",
+                    "video_provider": "cloudflare-workers-ai",
+                    "video_model": "pruna/p-video",
+                    "image_provider": "cloudflare-workers-ai",
+                    "image_model": "@cf/black-forest-labs/flux-2-klein-4b",
+                    "character_identity": "MIKO_CAT",
+                    "character_reference": "required",
+                    "aspect_ratio": "9:16",
+                    "resolution": "576x1024",
+                    "architecture": "native-worker",
+                })
+
+            if method == "POST" and path == "/story/generate":
+                return await self._story_generate(request)
+
+            if method == "POST" and path == "/story/image-prompts":
+                return await self._image_prompts(request)
+
+            if method == "POST" and path == "/images/generate":
+                try:
+                    return await self._image_generate(request)
+                except ImageGenerationEngineError as exc:
+                    return self._json(
+                        {"success": False, "error": str(exc)}, 500
+                    )
+
+            if method == "POST" and path == "/videos/generate":
+                try:
+                    return await self._video_generate(request)
+                except (
+                    VideoGenerationError,
+                    VideoGenerationInputError,
+                    VideoGenerationConfigurationError,
+                ) as exc:
+                    return self._json(
+                        {"success": False, "error": str(exc)}, 500
+                    )
+
+            return self._json(
+                {"success": False, "error": f"Route not found: {path}"},
+                404,
+            )
+
+        except ValueError as exc:
+            return self._json({"success": False, "error": str(exc)}, 400)
+        except Exception as exc:
+            return self._json(
+                {"success": False, "error": f"Worker error: {exc}"},
+                500,
+            )
 
 
-@app.get("/pipeline/status")
-async def pipeline_status():
-    return {
-        "story_engine": "ready",
-        "image_prompt_engine": "ready",
-        "image_generation_engine": "ready",
-        "video_generation_engine": "ready",
-        "video_provider": "cloudflare-workers-ai",
-        "video_model": "pruna/p-video",
-        "image_provider": "cloudflare-workers-ai",
-        "image_model": "@cf/black-forest-labs/flux-2-klein-4b",
-        "character_identity": "MIKO_CAT",
-        "character_reference": "required",
-        "aspect_ratio": "9:16",
-        "resolution": "576x1024",
-    }
-
-
-from workers import asgi
-
-Default = asgi.entrypoint(app)
+__all__ = ["Default"]
