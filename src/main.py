@@ -15,7 +15,7 @@ from engines.image_generation_engine import (
 
 
 APP_NAME = "AI Shorts Video API"
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.5.1"
 
 app = FastAPI(
     title=APP_NAME,
