@@ -7,6 +7,7 @@ const CONFIG = {
         generate: "/story/generate",
         imagePrompts: "/story/image-prompts",
         imagesGenerate: "/images/generate",
+        videosGenerate: "/videos/generate",
         pipeline: "/pipeline/status"
     }
 };
@@ -87,6 +88,8 @@ const els = {
 
 let lastStory = null;
 let lastVisualPrompts = null;
+const generatedMikoImagesV4 = new Map();
+const generatedMikoVideosV1 = new Map();
 
 function normalizeWorkerUrl(value) {
     let url = String(value ?? "").trim();
@@ -173,7 +176,7 @@ async function fetchJson(path, options = {}) {
         });
     } catch (error) {
         if (error.name === "AbortError") {
-            throw new Error("API request timed out after 10 seconds.");
+            throw new Error(`API request timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
         }
         throw new Error(`Cannot reach Worker API: ${error.message}`);
     } finally {
@@ -326,6 +329,7 @@ function renderVisualPrompts(result) {
     if (!scenes.length) return;
 
     ensureVisualPromptStyles();
+    ensureVideoGenerationStylesV1();
 
     let panel = document.getElementById("visualPromptsPanel");
 
@@ -1270,6 +1274,170 @@ function installMikoReferenceUIV4() {
     renderMikoReferenceV4();
 }
 
+
+function ensureVideoGenerationStylesV1() {
+    if (document.getElementById("videoGenerationStylesV1")) return;
+
+    const style = document.createElement("style");
+    style.id = "videoGenerationStylesV1";
+    style.textContent = `
+        .generated-video-container-v1 {
+            margin-top: 12px;
+        }
+
+        .generated-video-v1 {
+            border: 1px solid rgba(96,165,250,.22);
+            border-radius: 14px;
+            padding: 10px;
+            background: rgba(2,6,23,.5);
+        }
+
+        .generated-video-v1 video {
+            width: 100%;
+            max-width: 576px;
+            display: block;
+            border-radius: 10px;
+            background: #000;
+        }
+
+        .generated-video-meta-v1 {
+            display:flex;
+            flex-wrap:wrap;
+            gap:7px;
+            margin-top:8px;
+            font-size:10px;
+            opacity:.7;
+        }
+
+        .generated-video-actions-v1 {
+            margin-top:8px;
+        }
+
+        .generated-video-actions-v1 a {
+            display:inline-flex;
+            text-decoration:none;
+            border:1px solid rgba(255,255,255,.12);
+            border-radius:8px;
+            padding:6px 9px;
+            color:inherit;
+            font-size:10px;
+        }
+
+        .video-status-v1 {
+            margin-top:8px;
+            font-size:11px;
+        }
+
+        .video-status-loading-v1 { color:#fde68a; }
+        .video-status-success-v1 { color:#86efac; }
+        .video-status-error-v1 { color:#fda4af; }
+
+        .video-generating-v1 {
+            padding:20px;
+            border:1px dashed rgba(96,165,250,.25);
+            border-radius:12px;
+            color:#93c5fd;
+            text-align:center;
+            font-size:11px;
+        }
+    `;
+    document.head.appendChild(style);
+}
+
+function buildMikoMotionPromptV1(item) {
+    const base =
+        item?.motion_prompt ||
+        item?.scene_action ||
+        item?.action ||
+        item?.prompt ||
+        "Miko makes gentle natural movements, blinks naturally, looks around curiously, and moves his fluffy tail softly.";
+
+    return `${base}
+
+Animate only natural child-friendly motion. Keep Miko exactly consistent with the starting image: cute orange-and-white kitten, cat ears, feline face, whiskers, fluffy tail, blue hoodie, same proportions and same fur pattern. Smooth 3D children's animation, stable character identity, gentle camera movement, no sudden motion.`;
+}
+
+async function generateMikoVideoV1(item, button, videoContainer, statusElement = null) {
+    const sceneNo = item?.scene_number || 1;
+    const image = generatedMikoImagesV4.get(String(sceneNo));
+
+    if (!image) {
+        throw new Error("Generate the Miko image for this scene first.");
+    }
+
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = "Generating Video...";
+
+    if (statusElement) {
+        statusElement.textContent = "⏳ Generating Miko motion with Workers AI...";
+        statusElement.className = "video-status-v1 video-status-loading-v1";
+    }
+
+    if (videoContainer) {
+        videoContainer.innerHTML = `<div class="video-generating-v1">🎬 Generating Miko video...</div>`;
+    }
+
+    try {
+        const result = await fetchJson(CONFIG.endpoints.videosGenerate, {
+            method: "POST",
+            timeoutMs: 180000,
+            body: JSON.stringify({
+                image,
+                motion_prompt: buildMikoMotionPromptV1(item),
+                duration: 5,
+                resolution: "720p",
+                fps: 24,
+                draft: true,
+                scene_number: sceneNo
+            })
+        });
+
+        if (!result?.success || !result?.video_url) {
+            throw new Error(result?.error || "Video generation returned no video URL.");
+        }
+
+        generatedMikoVideosV1.set(String(sceneNo), result.video_url);
+
+        if (videoContainer) {
+            videoContainer.innerHTML = `
+                <div class="generated-video-v1">
+                    <video controls playsinline preload="metadata" src="${escapeHtml(result.video_url)}"></video>
+                    <div class="generated-video-meta-v1">
+                        <span>🎬 Miko Motion</span>
+                        <span>•</span>
+                        <span>5s</span>
+                        <span>•</span>
+                        <span>720p</span>
+                        <span>•</span>
+                        <span>24fps</span>
+                    </div>
+                    <div class="generated-video-actions-v1">
+                        <a href="${escapeHtml(result.video_url)}" target="_blank" rel="noopener noreferrer">Open Video</a>
+                    </div>
+                </div>
+            `;
+        }
+
+        if (statusElement) {
+            statusElement.textContent = "✅ Miko video berhasil dibuat.";
+            statusElement.className = "video-status-v1 video-status-success-v1";
+        }
+
+        setApiStatus("ok", `Scene ${String(sceneNo).padStart(2, "0")} video ready`);
+        return result;
+    } catch (error) {
+        if (statusElement) {
+            statusElement.textContent = `❌ ${error?.message || "Video generation failed."}`;
+            statusElement.className = "video-status-v1 video-status-error-v1";
+        }
+        throw error;
+    } finally {
+        button.disabled = false;
+        button.textContent = original;
+    }
+}
+
 async function generateMikoImageV4(item, button, imageContainer, statusElement = null) {
     const reference = getMikoReference();
 
@@ -1312,6 +1480,8 @@ async function generateMikoImageV4(item, button, imageContainer, statusElement =
             throw new Error(result?.error || "Image generation returned no image.");
         }
 
+        generatedMikoImagesV4.set(String(item?.scene_number || 1), result.image);
+
         if (imageContainer) {
             imageContainer.innerHTML = `
                 <div class="generated-image-v4">
@@ -1331,8 +1501,11 @@ async function generateMikoImageV4(item, button, imageContainer, statusElement =
                     <div class="generated-image-actions-v4">
                         <button type="button" data-regenerate-image>Regenerate</button>
                         <button type="button" data-download-image>Download</button>
+                        <button type="button" data-generate-video>🎬 Generate Video</button>
                     </div>
                 </div>
+                <div class="video-status-v1" aria-live="polite"></div>
+                <div class="generated-video-container-v1"></div>
             `;
 
             imageContainer.querySelector("[data-regenerate-image]")?.addEventListener(
@@ -1349,6 +1522,28 @@ async function generateMikoImageV4(item, button, imageContainer, statusElement =
                     document.body.appendChild(anchor);
                     anchor.click();
                     anchor.remove();
+                }
+            );
+
+            imageContainer.querySelector("[data-generate-video]")?.addEventListener(
+                "click",
+                async () => {
+                    const videoButton = imageContainer.querySelector("[data-generate-video]");
+                    const videoStatus = imageContainer.querySelector(".video-status-v1");
+                    const videoContainer = imageContainer.querySelector(".generated-video-container-v1");
+
+                    try {
+                        clearError();
+                        await generateMikoVideoV1(
+                            item,
+                            videoButton,
+                            videoContainer,
+                            videoStatus
+                        );
+                    } catch (error) {
+                        console.error("Miko video generation failed:", error);
+                        showError(error.message || "Miko video generation failed.");
+                    }
                 }
             );
         }
