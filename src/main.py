@@ -15,7 +15,7 @@ from engines.image_generation_engine import (
 
 
 APP_NAME = "AI Shorts Video API"
-APP_VERSION = "0.4.1"
+APP_VERSION = "0.5.0"
 
 app = FastAPI(
     title=APP_NAME,
@@ -160,6 +160,7 @@ async def generate_image(request: ImageGenerateRequest):
             negative_prompt=request.negative_prompt,
             steps=request.steps,
             seed=request.seed,
+            resolution=request.resolution,
         )
 
         return {
