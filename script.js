@@ -349,6 +349,7 @@ function renderVisualPrompts(result) {
                 <p>${scenes.length} scene image prompts · 9:16 · 1080×1920</p>
             </div>
             <div class="visual-prompts-actions">
+                <button type="button" id="generateAllMikoImages" class="generate-all-images-v4">🐱 Generate All Images</button>
                 <button type="button" id="copyAllVisualPrompts">Copy All</button>
                 <button type="button" id="downloadVisualPrompts">Download</button>
             </div>
@@ -418,6 +419,12 @@ function renderVisualPrompts(result) {
                 showError("Clipboard access is unavailable in this browser.");
             }
         });
+    });
+
+    panel.querySelector("#generateAllMikoImages")?.addEventListener("click", async () => {
+        const button = panel.querySelector("#generateAllMikoImages");
+        if (!button || button.disabled) return;
+        await generateAllMikoImagesV4(scenes, panel);
     });
 
     panel.querySelector("#copyAllVisualPrompts")?.addEventListener("click", async () => {
@@ -1062,6 +1069,28 @@ function mikoReferenceCss() {
             font-weight:700;
         }
 
+        .generate-all-images-v4 {
+            border:1px solid rgba(139,92,246,.35) !important;
+            background:rgba(139,92,246,.14) !important;
+            font-weight:800;
+        }
+
+        .generate-all-images-v4:disabled {
+            opacity:.55;
+            cursor:not-allowed;
+        }
+
+        .generate-all-status-v4 {
+            margin-top:12px;
+            padding:9px 11px;
+            border-radius:10px;
+            background:rgba(255,255,255,.035);
+            border:1px solid rgba(255,255,255,.06);
+            color:#cbd5e1;
+            font-size:11px;
+            line-height:1.45;
+        }
+
         .image-generating-v4 {
             margin-top:10px;
             color:#a78bfa;
@@ -1346,6 +1375,93 @@ async function generateMikoImageV4(item, button, imageContainer, statusElement =
    Replace your existing renderVisualPrompts() with this version if you want
    the image buttons integrated directly into each scene card.
 */
+async function generateAllMikoImagesV4(scenes, panel) {
+    const reference = getMikoReference();
+    const progress = panel.querySelector("#generateAllStatusV4");
+    const masterButton = panel.querySelector("#generateAllMikoImages");
+    const buttons = [...panel.querySelectorAll("[data-generate-image]")];
+
+    if (!reference) {
+        const message = "Miko Master Reference belum di-upload. Upload gambar Miko (kucing) terlebih dahulu.";
+        if (progress) progress.textContent = `❌ ${message}`;
+        showError(message);
+        return;
+    }
+
+    if (!scenes.length) return;
+
+    clearError();
+    if (masterButton) {
+        masterButton.disabled = true;
+        masterButton.textContent = "Generating All...";
+    }
+    buttons.forEach((button) => { button.disabled = true; });
+
+    const failed = [];
+    let completed = 0;
+
+    if (progress) {
+        progress.textContent = `⏳ Generating Scene 01/${String(scenes.length).padStart(2, "0")}...`;
+    }
+
+    try {
+        for (let index = 0; index < scenes.length; index += 1) {
+            const item = scenes[index];
+            const button = buttons[index];
+            const imageContainer = document.getElementById(`generatedImage-${index}`);
+            const statusElement = document.getElementById(`imageStatus-${index}`);
+            const sceneNo = String(item.scene_number ?? index + 1).padStart(2, "0");
+
+            if (progress) {
+                progress.textContent = `⏳ Generating Scene ${sceneNo}/${String(scenes.length).padStart(2, "0")}...`;
+            }
+
+            try {
+                await generateMikoImageV4(item, button, imageContainer, statusElement);
+                completed += 1;
+            } catch (error) {
+                failed.push({ scene: sceneNo, error: error?.message || "Unknown error" });
+                // Continue to the next scene so one failed generation does not
+                // cancel the complete batch.
+                if (statusElement) {
+                    statusElement.textContent = `❌ Scene ${sceneNo} failed — continuing...`;
+                }
+            }
+
+            // Small gap between requests to avoid sending a burst to Workers AI.
+            if (index < scenes.length - 1) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
+
+        if (failed.length === 0) {
+            if (progress) {
+                progress.textContent = `✅ All ${completed} Miko images generated successfully.`;
+            }
+            setApiStatus("ok", `All ${completed} Miko images ready`);
+        } else {
+            const failedScenes = failed.map(item => `Scene ${item.scene}`).join(", ");
+            if (progress) {
+                progress.textContent = `⚠️ ${completed}/${scenes.length} generated. Failed: ${failedScenes}.`;
+            }
+            showError(
+                `Batch image generation selesai: ${completed}/${scenes.length} berhasil. Failed: ${failedScenes}.`
+            );
+            setApiStatus("error", `${completed}/${scenes.length} images ready`);
+        }
+    } finally {
+        if (masterButton) {
+            masterButton.disabled = false;
+            masterButton.textContent = "🐱 Generate All Images";
+        }
+        buttons.forEach((button) => {
+            // Individual buttons are re-enabled by generateMikoImageV4.
+            // Re-enable untouched buttons here as well.
+            button.disabled = false;
+        });
+    }
+}
+
 function renderVisualPromptsV4(result) {
     lastVisualPrompts = result;
 
@@ -1424,6 +1540,10 @@ function renderVisualPromptsV4(result) {
                     <div id="generatedImage-${index}"></div>
                 </article>
             `).join("")}
+        </div>
+
+        <div id="generateAllStatusV4" class="generate-all-status-v4">
+            Ready — generate one scene or all scenes sequentially.
         </div>
 
         <div class="visual-prompt-status">
