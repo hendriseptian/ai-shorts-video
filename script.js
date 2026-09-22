@@ -342,7 +342,7 @@ async function generateSceneImage(item, button) {
                 episode_id: lastStory?.episode?.episode_id || null,
                 steps: 4,
                 aspect_ratio: item.aspect_ratio || "9:16",
-                resolution: item.resolution || "1080x1920"
+                resolution: "576x1024"
             })
         });
 
@@ -352,6 +352,8 @@ async function generateSceneImage(item, button) {
 
         item.generated_image = result.data_uri;
         item.generated_at = new Date().toISOString();
+        item.aspect_ratio = result.aspect_ratio || "9:16";
+        item.resolution = result.resolution || "576x1024";
 
         const card = button?.closest(".visual-prompt-card");
         if (card) {
@@ -465,7 +467,7 @@ function renderVisualPrompts(result) {
         <div class="visual-prompts-header">
             <div>
                 <h3>🎨 Visual Prompts</h3>
-                <p>${scenes.length} scene image prompts · 9:16 · 1080×1920</p>
+                <p>${scenes.length} scene image prompts · true 9:16 · 576×1024</p>
             </div>
             <div class="visual-prompts-actions">
                 <button type="button" id="copyAllVisualPrompts">Copy All</button>
@@ -513,7 +515,7 @@ function renderVisualPrompts(result) {
         </div>
 
         <div class="visual-prompt-status">
-            Image generation is not connected yet. These prompts are ready for the next provider stage.
+            Image generation is connected. Images are generated as true 9:16 vertical frames (576×1024) for Shorts.
         </div>
     `;
 
