@@ -6,6 +6,7 @@ const CONFIG = {
         options: "/story/options",
         generate: "/story/generate",
         imagePrompts: "/story/image-prompts",
+        imageGenerate: "/images/generate",
         pipeline: "/pipeline/status"
     }
 };
@@ -317,6 +318,126 @@ function ensureVisualPromptStyles() {
     document.head.appendChild(style);
 }
 
+
+async function generateSceneImage(item, button) {
+    if (!item?.prompt) {
+        showError("This scene has no image prompt.");
+        return null;
+    }
+
+    const originalText = button?.textContent || "Generate Image";
+
+    if (button) {
+        button.disabled = true;
+        button.textContent = "Generating...";
+    }
+
+    try {
+        const result = await fetchJson(CONFIG.endpoints.imageGenerate, {
+            method: "POST",
+            body: JSON.stringify({
+                prompt: item.prompt,
+                negative_prompt: item.negative_prompt || "",
+                scene_number: Number(item.scene_number || 1),
+                episode_id: lastStory?.episode?.episode_id || null,
+                steps: 4,
+                aspect_ratio: item.aspect_ratio || "9:16",
+                resolution: item.resolution || "1080x1920"
+            })
+        });
+
+        if (!result?.success || !result?.data_uri) {
+            throw new Error(result?.error || "Image generation returned no image.");
+        }
+
+        item.generated_image = result.data_uri;
+        item.generated_at = new Date().toISOString();
+
+        const card = button?.closest(".visual-prompt-card");
+        if (card) {
+            let preview = card.querySelector(".generated-image-preview");
+
+            if (!preview) {
+                preview = document.createElement("div");
+                preview.className = "generated-image-preview";
+                card.appendChild(preview);
+            }
+
+            preview.innerHTML = `
+                <div class="visual-prompt-label">Generated Image</div>
+                <div class="generated-image-frame">
+                    <img src="${result.data_uri}" alt="Generated Miko scene ${escapeHtml(item.scene_number || "")}">
+                </div>
+                <div class="generated-image-actions">
+                    <button type="button" class="visual-prompt-copy regenerate-image">Regenerate</button>
+                    <a class="visual-prompt-copy download-generated-image"
+                       download="miko-scene-${String(item.scene_number || 1).padStart(2, "0")}.jpg"
+                       href="${result.data_uri}">Download</a>
+                </div>
+            `;
+
+            preview.querySelector(".regenerate-image")?.addEventListener("click", async (event) => {
+                await generateSceneImage(item, event.currentTarget);
+            });
+        }
+
+        setApiStatus("ok", `Scene ${item.scene_number || ""} image ready`);
+        return result;
+    } catch (error) {
+        console.error("Image generation failed:", error);
+        showError(`Scene ${item.scene_number || ""} image failed: ${error.message}`);
+        setApiStatus("error", "Image generation failed");
+        return null;
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.textContent = originalText;
+        }
+    }
+}
+
+async function generateAllSceneImages(scenes, button) {
+    if (!Array.isArray(scenes) || !scenes.length) return;
+
+    const originalText = button?.textContent || "Generate All";
+    if (button) {
+        button.disabled = true;
+        button.textContent = "Generating 1/5...";
+    }
+
+    let completed = 0;
+
+    try {
+        for (const item of scenes) {
+            const temporaryButton = document.querySelector(
+                `[data-generate-visual="${scenes.indexOf(item)}"]`
+            );
+
+            const result = await generateSceneImage(
+                item,
+                temporaryButton || button
+            );
+
+            if (result?.success) completed += 1;
+
+            if (button && completed < scenes.length) {
+                button.textContent = `Generating ${completed + 1}/${scenes.length}...`;
+            }
+        }
+
+        if (completed === scenes.length) {
+            setApiStatus("ok", "All scene images ready");
+        } else {
+            setApiStatus("error", `${completed}/${scenes.length} images ready`);
+        }
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.textContent = originalText;
+        }
+    }
+}
+
 function renderVisualPrompts(result) {
     lastVisualPrompts = result;
 
@@ -348,6 +469,7 @@ function renderVisualPrompts(result) {
             </div>
             <div class="visual-prompts-actions">
                 <button type="button" id="copyAllVisualPrompts">Copy All</button>
+                <button type="button" id="generateAllVisualImages">✨ Generate All Images</button>
                 <button type="button" id="downloadVisualPrompts">Download</button>
             </div>
         </div>
@@ -365,6 +487,11 @@ function renderVisualPrompts(result) {
                                 class="visual-prompt-copy"
                                 data-copy-visual="${index}"
                             >Copy Prompt</button>
+                            <button
+                                type="button"
+                                class="visual-prompt-copy"
+                                data-generate-visual="${index}"
+                            >Generate Image</button>
                         </div>
                     </div>
 
@@ -442,6 +569,18 @@ function renderVisualPrompts(result) {
             console.error(error);
             showError("Clipboard access is unavailable in this browser.");
         }
+    });
+
+    panel.querySelectorAll("[data-generate-visual]").forEach((button) => {
+        button.addEventListener("click", async () => {
+            const index = Number(button.dataset.generateVisual);
+            const item = scenes[index];
+            await generateSceneImage(item, button);
+        });
+    });
+
+    panel.querySelector("#generateAllVisualImages")?.addEventListener("click", async (event) => {
+        await generateAllSceneImages(scenes, event.currentTarget);
     });
 
     panel.querySelector("#downloadVisualPrompts")?.addEventListener("click", () => {
