@@ -1,38 +1,16 @@
-"""
-Miko AI Shorts - Story Engine V1
+from pathlib import Path
 
-Purpose:
-    Generate a complete Miko YouTube Shorts story using:
-        - Character Bible
-        - Story Bible
-        - World Bible
+source = Path("/mnt/data/Pasted text(20260922-071552).txt").read_text(encoding="utf-8")
 
-Pipeline:
-    Character Bible
-    Story Bible
-    World Bible
-           ↓
-      Story Engine
-           ↓
-       Story JSON
-           ↓
-      Scene Engine
-"""
-
-from __future__ import annotations
+# The uploaded text is a line-numbered paste of the current Story Engine.
+# Build a clean, copy-pasteable version from the supplied source while applying
+# the Cloudflare-friendly resource-loading change.
+code = '''from __future__ import annotations
 
 import json
 import random
-from pathlib import Path
+from importlib import resources
 from typing import Any, Dict, List, Optional
-
-
-BASE_DIR = Path(__file__).resolve().parent
-CONFIG_DIR = BASE_DIR / "config"
-
-CHARACTER_BIBLE_PATH = CONFIG_DIR / "character_bible.json"
-STORY_BIBLE_PATH = CONFIG_DIR / "story_bible.json"
-WORLD_BIBLE_PATH = CONFIG_DIR / "world_bible.json"
 
 
 class StoryEngineError(Exception):
@@ -48,42 +26,45 @@ class StoryValidationError(StoryEngineError):
 
 
 class BibleLoader:
-    """Loads the three project Bible files."""
+    """Loads the three project Bible files from the packaged engines/config data."""
 
-    def __init__(
-        self,
-        character_path: Path = CHARACTER_BIBLE_PATH,
-        story_path: Path = STORY_BIBLE_PATH,
-        world_path: Path = WORLD_BIBLE_PATH,
-    ):
-        self.character_path = character_path
-        self.story_path = story_path
-        self.world_path = world_path
+    CONFIG_PACKAGE = "engines.config"
 
-    def _load_json(self, path: Path) -> Dict[str, Any]:
-        if not path.exists():
-            raise BibleLoadError(f"Bible file not found: {path}")
+    CHARACTER_FILE = "character_bible.json"
+    STORY_FILE = "story_bible.json"
+    WORLD_FILE = "world_bible.json"
 
+    def _load_json(self, filename: str) -> Dict[str, Any]:
         try:
-            with path.open("r", encoding="utf-8") as file:
-                data = json.load(file)
-        except json.JSONDecodeError as exc:
+            resource = resources.files(self.CONFIG_PACKAGE).joinpath(filename)
+
+            if not resource.is_file():
+                raise BibleLoadError(
+                    f"Bible file not found in package "
+                    f"{self.CONFIG_PACKAGE}: {filename}"
+                )
+
+            data = json.loads(resource.read_text(encoding="utf-8"))
+
+        except BibleLoadError:
+            raise
+        except Exception as exc:
             raise BibleLoadError(
-                f"Invalid JSON in Bible: {path}"
+                f"Unable to load Bible file: {filename}"
             ) from exc
 
         if not isinstance(data, dict):
             raise BibleLoadError(
-                f"Bible must contain a JSON object: {path}"
+                f"Bible must contain a JSON object: {filename}"
             )
 
         return data
 
     def load_all(self) -> Dict[str, Dict[str, Any]]:
         return {
-            "character": self._load_json(self.character_path),
-            "story": self._load_json(self.story_path),
-            "world": self._load_json(self.world_path),
+            "character": self._load_json(self.CHARACTER_FILE),
+            "story": self._load_json(self.STORY_FILE),
+            "world": self._load_json(self.WORLD_FILE),
         }
 
 
@@ -148,8 +129,12 @@ class StoryEngine:
 
         if category:
             category = category.upper()
+
             if category not in categories:
-                raise StoryEngineError(f"Unknown story category: {category}")
+                raise StoryEngineError(
+                    f"Unknown story category: {category}"
+                )
+
             return category
 
         return random.choice(categories)
@@ -162,8 +147,12 @@ class StoryEngine:
 
         if core_value:
             core_value = core_value.upper()
+
             if core_value not in values:
-                raise StoryEngineError(f"Unknown core value: {core_value}")
+                raise StoryEngineError(
+                    f"Unknown core value: {core_value}"
+                )
+
             return core_value
 
         return random.choice(values)
@@ -182,14 +171,19 @@ class StoryEngine:
 
         if location:
             location = location.upper()
+
             if location not in location_map:
-                raise StoryEngineError(f"Unknown location: {location}")
+                raise StoryEngineError(
+                    f"Unknown location: {location}"
+                )
+
             return location
 
         weighted_locations = []
 
         for item in locations:
             location_id = item.get("id")
+
             if not location_id:
                 continue
 
@@ -198,6 +192,11 @@ class StoryEngine:
             else:
                 weighted_locations.append(location_id)
 
+        if not weighted_locations:
+            raise StoryEngineError(
+                "No valid locations found in World Bible."
+            )
+
         return random.choice(weighted_locations)
 
     def _select_supporting_character(
@@ -205,7 +204,10 @@ class StoryEngine:
         supporting_character: Optional[str],
     ) -> Optional[str]:
 
-        characters = self.world_bible.get("supporting_characters", [])
+        characters = self.world_bible.get(
+            "supporting_characters",
+            [],
+        )
 
         if not characters:
             return None
@@ -221,11 +223,13 @@ class StoryEngine:
 
             if supporting_character not in character_map:
                 raise StoryEngineError(
-                    f"Unknown supporting character: {supporting_character}"
+                    f"Unknown supporting character: "
+                    f"{supporting_character}"
                 )
 
             return supporting_character
 
+        # 25% chance of a Miko-only episode.
         if random.random() < 0.25:
             return None
 
@@ -256,13 +260,14 @@ class StoryEngine:
         location_data = self._get_location(location)
 
         supporting_data = None
+
         if supporting_character:
             supporting_data = self._get_supporting_character(
                 supporting_character
             )
 
         object_name = (
-            main_object
+            main_object.upper()
             if main_object
             else self._suggest_object(category, location)
         )
@@ -327,15 +332,28 @@ class StoryEngine:
             if location.get("id") == location_id:
                 return location
 
-        raise StoryEngineError(f"Location not found: {location_id}")
+        raise StoryEngineError(
+            f"Location not found: {location_id}"
+        )
 
     def _get_supporting_character(
         self,
         character_id: str,
     ) -> Dict[str, Any]:
 
+        # Supporting characters are defined in the World Bible in V1.
         for character in self.world_bible.get(
-            "supporting_characters", []
+            "supporting_characters",
+            [],
+        ):
+            if character.get("id") == character_id:
+                return character
+
+        # Fallback to Character Bible if a future Bible version moves
+        # supporting characters there.
+        for character in self.character_bible.get(
+            "supporting_characters",
+            [],
         ):
             if character.get("id") == character_id:
                 return character
@@ -414,7 +432,7 @@ class StoryEngine:
 
         objects = location_objects.get(
             location,
-            ["COLORFUL_TOY"]
+            ["COLORFUL_TOY"],
         )
 
         return random.choice(objects)
@@ -426,7 +444,10 @@ class StoryEngine:
         main_object: str,
     ) -> str:
 
-        object_name = main_object.replace("_", " ").title()
+        object_name = main_object.replace(
+            "_",
+            " ",
+        ).title()
 
         templates = [
             f"Miko Menemukan {object_name}!",
@@ -443,15 +464,25 @@ class StoryEngine:
         main_object: str,
     ) -> str:
 
-        location_name = location.get("name", "tempat baru")
-        object_name = main_object.replace("_", " ").lower()
+        location_name = location.get(
+            "name",
+            "tempat baru",
+        )
+
+        object_name = main_object.replace(
+            "_",
+            " ",
+        ).lower()
 
         return (
             f"Miko melihat sesuatu yang menarik di "
             f"{location_name.lower()}: {object_name}!"
         )
 
-    def _generate_lesson(self, core_value: str) -> str:
+    def _generate_lesson(
+        self,
+        core_value: str,
+    ) -> str:
 
         lessons = {
             "KINDNESS":
@@ -508,7 +539,9 @@ class StoryEngine:
         standard_durations = [5, 10, 20, 15, 10]
 
         if duration <= 0:
-            raise StoryEngineError("Duration must be greater than zero.")
+            raise StoryEngineError(
+                "Duration must be greater than zero."
+            )
 
         scale = duration / 60
 
@@ -520,14 +553,26 @@ class StoryEngine:
         difference = duration - sum(scene_durations)
         scene_durations[-1] += difference
 
+        if scene_durations[-1] <= 0:
+            raise StoryEngineError(
+                "Duration is too short for the five-scene structure."
+            )
+
         supporting_name = (
             supporting_data.get("name")
             if supporting_data
             else None
         )
 
-        object_name = main_object.replace("_", " ").lower()
-        location_name = location_data.get("name", "tempat")
+        object_name = main_object.replace(
+            "_",
+            " ",
+        ).lower()
+
+        location_name = location_data.get(
+            "name",
+            "tempat",
+        )
 
         scenes = [
             {
@@ -611,9 +656,11 @@ class StoryEngine:
             scenes[2]["story"] += (
                 f" {supporting_name} ikut berada di dekat Miko."
             )
+
             scenes[3]["story"] += (
                 f" {supporting_name} memberikan dukungan kecil."
             )
+
             scenes[4]["story"] += (
                 f" Miko dan {supporting_name} tersenyum bersama."
             )
@@ -629,8 +676,11 @@ class StoryEngine:
 
         for scene in scenes:
             dialogue = scene.get("dialogue")
+
             if dialogue:
-                dialogue_lines.append(dialogue.strip())
+                dialogue_lines.append(
+                    dialogue.strip()
+                )
 
         return "\n".join(dialogue_lines)
 
@@ -669,7 +719,9 @@ class StoryEngine:
     ) -> bool:
 
         if not isinstance(story, dict):
-            raise StoryValidationError("Story must be a JSON object.")
+            raise StoryValidationError(
+                "Story must be a JSON object."
+            )
 
         required_fields = (
             self.story_bible
@@ -693,7 +745,9 @@ class StoryEngine:
         scenes = story.get("scenes", [])
 
         if not scenes:
-            raise StoryValidationError("Story must contain scenes.")
+            raise StoryValidationError(
+                "Story must contain scenes."
+            )
 
         scene_total = sum(
             int(scene.get("duration", 0))
@@ -729,11 +783,14 @@ class StoryEngine:
 
         text = json.dumps(
             story,
-            ensure_ascii=False
+            ensure_ascii=False,
         ).upper()
 
         for theme in prohibited:
-            readable_theme = theme.replace("_", " ").upper()
+            readable_theme = theme.replace(
+                "_",
+                " ",
+            ).upper()
 
             if readable_theme in text:
                 raise StoryValidationError(
@@ -752,10 +809,17 @@ class StoryEngine:
                 "No scenes available for focus validation."
             )
 
-        for index, scene in enumerate(scenes, start=1):
+        for index, scene in enumerate(
+            scenes,
+            start=1,
+        ):
             combined = " ".join(
                 str(scene.get(key, ""))
-                for key in ["story", "action", "dialogue"]
+                for key in [
+                    "story",
+                    "action",
+                    "dialogue",
+                ]
             ).lower()
 
             if "miko" not in combined:
@@ -774,7 +838,10 @@ class StoryEngine:
             .get("scene_required_fields", [])
         )
 
-        for index, scene in enumerate(scenes, start=1):
+        for index, scene in enumerate(
+            scenes,
+            start=1,
+        ):
             for field in required_fields:
                 if field not in scene:
                     raise StoryValidationError(
@@ -848,3 +915,10 @@ if __name__ == "__main__":
         print()
         print("STORY ENGINE ERROR:")
         print(exc)
+'''
+
+out = Path("/mnt/data/story_engine_v2.py")
+out.write_text(code, encoding="utf-8")
+
+print(f"Created: {out}")
+print(f"Lines: {len(code.splitlines())}")
