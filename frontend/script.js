@@ -104,12 +104,22 @@ function setLoading(isLoading) {
 }
 
 async function fetchJson(path, options = {}) {
+    const method = String(options.method || "GET").toUpperCase();
+    const headers = {
+        ...(options.headers || {})
+    };
+
+    // Do NOT send Content-Type: application/json on GET requests.
+    // From a local file (origin: null), that header can trigger a CORS
+    // preflight before the Worker receives the request.
+    if (method !== "GET" && options.body !== undefined) {
+        headers["Content-Type"] = "application/json";
+    }
+
     const response = await fetch(apiUrl(path), {
         ...options,
-        headers: {
-            "Content-Type": "application/json",
-            ...(options.headers || {})
-        }
+        method,
+        headers
     });
 
     let payload = null;
@@ -161,10 +171,18 @@ async function loadOptions() {
 
     const data = await fetchJson(CONFIG.endpoints.options);
 
+    if (!data || typeof data !== "object") {
+        throw new Error("Invalid /story/options response.");
+    }
+
     populateSelect(els.category, data.categories || []);
     populateSelect(els.coreValue, data.core_values || []);
     populateSelect(els.location, data.locations || []);
-    populateSelect(els.supportingCharacter, data.supporting_characters || [], "Miko only");
+    populateSelect(
+        els.supportingCharacter,
+        data.supporting_characters || [],
+        "Miko only"
+    );
 
     const durations = data.durations?.length ? data.durations : [30, 45, 60, 90];
     populateSelect(els.duration, durations.map((value) => ({
@@ -175,6 +193,10 @@ async function loadOptions() {
     if (els.category.options.length) els.category.selectedIndex = 0;
     if (els.coreValue.options.length) els.coreValue.selectedIndex = 0;
     if (els.location.options.length) els.location.selectedIndex = 0;
+
+    if (!els.category.options.length || !els.coreValue.options.length || !els.location.options.length) {
+        throw new Error("Worker responded, but story options are empty.");
+    }
 
     setApiStatus("ok", "API connected");
 }
