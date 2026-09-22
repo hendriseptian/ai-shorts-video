@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 
@@ -9,22 +10,24 @@ class ImageGenerationError(Exception):
 
 class ImageGenerationEngine:
     """
-    Cloudflare Workers AI image generation engine.
+    Cloudflare Workers AI image generation engine for vertical Shorts.
 
     Provider:
-        @cf/black-forest-labs/flux-1-schnell
+        @cf/bytedance/stable-diffusion-xl-lightning
 
-    The engine receives the already-built visual prompt from the
-    Image Prompt Engine and sends it to Workers AI. The generated
-    image is returned as a data URI so the frontend can preview it
-    immediately without requiring storage yet.
+    This model supports explicit width/height, so the backend requests an
+    actual 9:16 canvas instead of merely labeling a square image as 9:16.
     """
 
-    MODEL = "@cf/black-forest-labs/flux-1-schnell"
-    VERSION = "1.0.0"
+    MODEL = "@cf/bytedance/stable-diffusion-xl-lightning"
+    VERSION = "2.0.0"
     DEFAULT_STEPS = 4
-    MAX_STEPS = 8
+    MAX_STEPS = 20
     MAX_PROMPT_LENGTH = 2048
+
+    # Development/final-friendly vertical canvas. Exact 9:16 ratio.
+    DEFAULT_WIDTH = 576
+    DEFAULT_HEIGHT = 1024
 
     def __init__(self) -> None:
         self.provider = "cloudflare-workers-ai"
@@ -38,6 +41,8 @@ class ImageGenerationEngine:
             "version": self.VERSION,
             "output": "base64-data-uri",
             "aspect_ratio_target": "9:16",
+            "width": self.DEFAULT_WIDTH,
+            "height": self.DEFAULT_HEIGHT,
         }
 
     @staticmethod
@@ -56,12 +61,95 @@ class ImageGenerationEngine:
             value = value[: ImageGenerationEngine.MAX_PROMPT_LENGTH]
         return value
 
+    @staticmethod
+    def _parse_resolution(resolution: str) -> tuple[int, int]:
+        """Return a safe exact-9:16 resolution; fall back to 576x1024."""
+        try:
+            raw = str(resolution or "").lower().replace(" ", "")
+            if "x" in raw:
+                w_text, h_text = raw.split("x", 1)
+                width = int(w_text)
+                height = int(h_text)
+            else:
+                raise ValueError
+        except Exception:
+            return ImageGenerationEngine.DEFAULT_WIDTH, ImageGenerationEngine.DEFAULT_HEIGHT
+
+        # We intentionally constrain output to a stable 9:16 canvas.
+        # Keep the requested size only if it is an exact 9:16 ratio and
+        # within the model's documented 256..2048 range.
+        if width < 256 or height < 256 or width > 2048 or height > 2048:
+            return ImageGenerationEngine.DEFAULT_WIDTH, ImageGenerationEngine.DEFAULT_HEIGHT
+
+        if width * 16 != height * 9:
+            return ImageGenerationEngine.DEFAULT_WIDTH, ImageGenerationEngine.DEFAULT_HEIGHT
+
+        # Model dimensions are safest when divisible by 8.
+        width = (width // 8) * 8
+        height = (height // 8) * 8
+
+        if width * 16 != height * 9 or width < 256 or height < 256:
+            return ImageGenerationEngine.DEFAULT_WIDTH, ImageGenerationEngine.DEFAULT_HEIGHT
+
+        return width, height
+
+    @staticmethod
+    def _get_value(result: Any, key: str) -> Any:
+        try:
+            value = getattr(result, key)
+            if value is not None:
+                return value
+        except Exception:
+            pass
+        try:
+            if isinstance(result, dict):
+                return result.get(key)
+        except Exception:
+            pass
+        try:
+            value = result[key]
+            if value is not None:
+                return value
+        except Exception:
+            pass
+        return None
+
+    async def _extract_base64(self, result: Any) -> str | None:
+        """Handle both object-style and stream/bytes-style Workers AI output."""
+        for key in ("image", "image_b64", "image_base64"):
+            value = self._get_value(result, key)
+            if value:
+                if isinstance(value, str):
+                    return value
+                if isinstance(value, (bytes, bytearray, memoryview)):
+                    return base64.b64encode(bytes(value)).decode("ascii")
+
+        if isinstance(result, (bytes, bytearray, memoryview)):
+            return base64.b64encode(bytes(result)).decode("ascii")
+
+        # Some Workers AI image models return a JS ReadableStream. The
+        # Python Workers runtime can expose async arrayBuffer()/bytes()-like
+        # methods depending on the runtime version.
+        for method_name in ("arrayBuffer", "bytes"):
+            try:
+                method = getattr(result, method_name)
+                data = method()
+                if hasattr(data, "__await__"):
+                    data = await data
+                if isinstance(data, (bytes, bytearray, memoryview)):
+                    return base64.b64encode(bytes(data)).decode("ascii")
+            except Exception:
+                continue
+
+        return None
+
     async def generate(
         self,
         prompt: str,
         negative_prompt: str = "",
         steps: int = DEFAULT_STEPS,
         seed: int | None = None,
+        resolution: str = "576x1024",
     ) -> dict[str, Any]:
         try:
             from workers import env
@@ -72,29 +160,23 @@ class ImageGenerationEngine:
 
         clean_prompt = self._clean_prompt(prompt)
         clean_negative = self._clean_negative_prompt(negative_prompt)
+        width, height = self._parse_resolution(resolution)
 
         try:
             steps_value = int(steps)
         except (TypeError, ValueError):
             steps_value = self.DEFAULT_STEPS
-
         steps_value = max(1, min(self.MAX_STEPS, steps_value))
 
-        # FLUX.1 schnell's documented binding input is prompt + optional
-        # seed/steps. We include the negative prompt in the prompt itself
-        # because this model's documented schema does not expose a
-        # dedicated negative_prompt parameter.
-        final_prompt = clean_prompt
-        if clean_negative:
-            final_prompt += (
-                "\n\nAVOID / NEGATIVE CONSTRAINTS:\n"
-                + clean_negative
-            )
-
         payload: dict[str, Any] = {
-            "prompt": final_prompt,
-            "steps": steps_value,
+            "prompt": clean_prompt,
+            "width": width,
+            "height": height,
+            "num_steps": steps_value,
         }
+
+        if clean_negative:
+            payload["negative_prompt"] = clean_negative
 
         if seed is not None:
             try:
@@ -109,45 +191,31 @@ class ImageGenerationEngine:
             if "quota" in message.lower() or "neuron" in message.lower():
                 raise ImageGenerationError(
                     "Workers AI image generation quota was reached. "
-                    "Please check the Workers AI usage/quota and try again later."
+                    "Please check Workers AI usage/quota and try again later."
                 ) from exc
             raise ImageGenerationError(
                 f"Workers AI image generation failed: {message}"
             ) from exc
 
-        image_base64 = None
-
-        try:
-            image_base64 = result.image
-        except Exception:
-            pass
-
-        if not image_base64:
-            try:
-                image_base64 = result["image"]
-            except Exception:
-                pass
-
+        image_base64 = await self._extract_base64(result)
         if not image_base64:
             raise ImageGenerationError(
-                "Workers AI returned no image data."
+                "Workers AI returned no image data. "
+                "The model response format may have changed."
             )
-
-        image_base64 = str(image_base64)
-
-        # Cloudflare's FLUX.1 schnell example returns JPEG base64.
-        data_uri = f"data:image/jpeg;base64,{image_base64}"
 
         return {
             "success": True,
             "provider": self.provider,
             "model": self.model,
             "engine_version": self.VERSION,
-            "data_uri": data_uri,
+            "data_uri": f"data:image/jpeg;base64,{image_base64}",
             "image_base64": image_base64,
             "mime_type": "image/jpeg",
             "aspect_ratio": "9:16",
-            "resolution": "1080x1920 target",
+            "resolution": f"{width}x{height}",
+            "width": width,
+            "height": height,
             "steps": steps_value,
             "seed": payload.get("seed"),
         }
