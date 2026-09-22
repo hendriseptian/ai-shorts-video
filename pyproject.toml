@@ -1,14 +1,12 @@
 [project]
 name = "ai-shorts-video"
-version = "0.2.0"
-description = "Miko AI Shorts backend running on Cloudflare Python Workers"
+version = "0.6.0"
+description = "Miko AI Shorts native Cloudflare Python Worker"
 requires-python = ">=3.13"
-dependencies = [
-    "fastapi>=0.115,<1.0"
-]
+dependencies = []
 
 [dependency-groups]
 dev = [
-    "workers-py==1.16.2",
-    "workers-runtime-sdk==1.6.8"
+    "workers-py",
+    "workers-runtime-sdk"
 ]
