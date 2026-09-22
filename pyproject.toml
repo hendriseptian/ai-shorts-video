@@ -1,0 +1,14 @@
+[project]
+name = "ai-shorts-video"
+version = "0.1.0"
+description = "AI Shorts Video backend using FastAPI on Cloudflare Python Workers"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115,<1.0"
+]
+
+[dependency-groups]
+dev = [
+    "workers-py",
+    "workers-runtime-sdk"
+]

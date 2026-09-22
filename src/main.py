@@ -1,0 +1,150 @@
+from typing import Optional
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+from engines.story_engine import StoryEngine, StoryEngineError
+
+
+APP_NAME = "AI Shorts Video API"
+APP_VERSION = "0.1.0"
+
+app = FastAPI(
+    title=APP_NAME,
+    version=APP_VERSION,
+    description="Online AI Shorts Video backend running on Cloudflare Python Workers.",
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
+
+# Development CORS.
+# We can restrict this to the GitHub Pages/custom frontend domain later.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+story_engine = StoryEngine()
+
+
+class StoryGenerateRequest(BaseModel):
+    category: Optional[str] = None
+    core_value: Optional[str] = None
+    location: Optional[str] = None
+    supporting_character: Optional[str] = None
+    main_object: Optional[str] = None
+    duration: int = Field(default=60, ge=10, le=180)
+    language: str = "id"
+    episode_id: Optional[str] = None
+
+
+@app.get("/")
+async def root():
+    return {
+        "status": "online",
+        "application": APP_NAME,
+        "version": APP_VERSION,
+        "platform": "cloudflare-python-workers",
+        "engine": "story-engine",
+    }
+
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "healthy",
+        "story_engine": "ready",
+        "platform": "cloudflare-python-workers",
+    }
+
+
+@app.get("/bibles")
+async def bibles():
+    return {
+        "character_bible": story_engine.bibles.character is not None,
+        "story_bible": story_engine.bibles.story is not None,
+        "world_bible": story_engine.bibles.world is not None,
+    }
+
+
+@app.get("/story/options")
+async def story_options():
+    story_bible = story_engine.bibles.story
+    world_bible = story_engine.bibles.world
+    character_bible = story_engine.bibles.character
+
+    return {
+        "categories": story_bible.get("categories", []),
+        "core_values": story_bible.get("core_values", []),
+        "locations": [
+            {
+                "id": item.get("id"),
+                "name": item.get("name"),
+            }
+            for item in world_bible.get("locations", [])
+        ],
+        "supporting_characters": [
+            {
+                "id": item.get("id"),
+                "name": item.get("name"),
+                "species": item.get("species"),
+            }
+            for item in character_bible.get("supporting_characters", [])
+        ],
+        "languages": ["id", "en"],
+        "durations": [30, 45, 60, 90],
+    }
+
+
+@app.post("/story/generate")
+async def generate_story(request: StoryGenerateRequest):
+    try:
+        story = story_engine.generate_story(
+            category=request.category,
+            core_value=request.core_value,
+            location=request.location,
+            supporting_character=request.supporting_character,
+            main_object=request.main_object,
+            duration=request.duration,
+            language=request.language,
+            episode_id=request.episode_id,
+        )
+
+        return {
+            "success": True,
+            "engine": "story-engine",
+            "version": APP_VERSION,
+            "data": story,
+        }
+
+    except StoryEngineError as exc:
+        return {
+            "success": False,
+            "engine": "story-engine",
+            "error": str(exc),
+        }
+
+
+@app.get("/pipeline/status")
+async def pipeline_status():
+    return {
+        "story_engine": "READY",
+        "scene_engine": "PLANNED",
+        "video_engine": "PLANNED",
+        "voice_engine": "PLANNED",
+        "edit_engine": "PLANNED",
+        "qc_engine": "PLANNED",
+        "youtube_engine": "PLANNED",
+        "automation_engine": "PLANNED",
+    }
+
+
+# Cloudflare Python Workers ASGI entrypoint.
+# This replaces the local Uvicorn entrypoint used by a normal FastAPI server.
+from workers import asgi
+
+Default = asgi.entrypoint(app)
