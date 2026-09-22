@@ -15,7 +15,7 @@ from engines.image_generation_engine import (
 
 
 APP_NAME = "AI Shorts Video API"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 
 app = FastAPI(
     title=APP_NAME,
@@ -130,10 +130,11 @@ async def generate_story(request: StoryGenerateRequest):
 @app.post("/story/image-prompts")
 async def generate_image_prompts(request: ImagePromptRequest):
     try:
+        # ImagePromptEngine derives episode_id and language directly
+        # from the story payload. Keep this call compatible with the
+        # Cloudflare-safe engine signature.
         result = image_prompt_engine.generate_for_story(
             story=request.story,
-            episode_id=request.episode_id,
-            language=request.language,
         )
         return {
             "success": True,
