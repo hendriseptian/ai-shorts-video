@@ -1,0 +1,197 @@
+{
+  "bible": {
+    "name": "Miko Story Bible",
+    "version": "1.0",
+    "status": "ACTIVE"
+  },
+  "story_identity": {
+    "main_character": "MIKO",
+    "target_audience": "children_ages_3_to_8",
+    "primary_language": "id",
+    "default_duration_seconds": 60,
+    "format": "youtube_shorts",
+    "aspect_ratio": "9:16"
+  },
+  "core_story_formula": [
+    "MIKO_SEES",
+    "MIKO_DISCOVERS",
+    "MIKO_PLAYS_TRIES_EXPLORES",
+    "SOMETHING_HAPPENS",
+    "HAPPY_ENDING_SIMPLE_LESSON"
+  ],
+  "expanded_story_formula": [
+    "MIKO",
+    "MELIHAT",
+    "BERTANYA",
+    "MENCOBA",
+    "MENGALAMI",
+    "MENEMUKAN",
+    "BELAJAR",
+    "ENDING"
+  ],
+  "timing": [
+    {
+      "start": 0,
+      "end": 5,
+      "phase": "MIKO_SEES",
+      "purpose": "hook"
+    },
+    {
+      "start": 5,
+      "end": 15,
+      "phase": "MIKO_DISCOVERS",
+      "purpose": "discovery"
+    },
+    {
+      "start": 15,
+      "end": 35,
+      "phase": "MIKO_PLAYS_TRIES_EXPLORES",
+      "purpose": "main_action"
+    },
+    {
+      "start": 35,
+      "end": 50,
+      "phase": "SOMETHING_HAPPENS",
+      "purpose": "small_problem_or_surprise"
+    },
+    {
+      "start": 50,
+      "end": 60,
+      "phase": "HAPPY_ENDING_SIMPLE_LESSON",
+      "purpose": "positive_resolution_and_lesson"
+    }
+  ],
+  "categories": [
+    "ADVENTURE",
+    "FUNNY",
+    "FRIENDSHIP",
+    "DISCOVERY",
+    "LEARNING",
+    "HELPING_OTHERS",
+    "ANIMAL_FRIENDS",
+    "NATURE",
+    "SIMPLE_PROBLEM_SOLVING",
+    "EVERYDAY_LIFE",
+    "IMAGINATION",
+    "MUSIC_AND_PLAY"
+  ],
+  "core_values": [
+    "KINDNESS",
+    "SHARING",
+    "HONESTY",
+    "COURAGE",
+    "PATIENCE",
+    "CURIOSITY",
+    "HELPING_OTHERS",
+    "RESPECT",
+    "CLEANLINESS",
+    "TEAMWORK",
+    "PROBLEM_SOLVING",
+    "LEARNING_FROM_MISTAKES",
+    "RESPONSIBILITY",
+    "EMPATHY",
+    "GRATITUDE",
+    "SELF_CONFIDENCE",
+    "TAKING_CARE_OF_NATURE"
+  ],
+  "story_rules": {
+    "main_character_focus_percent": {
+      "minimum": 70,
+      "maximum": 90
+    },
+    "supporting_character_focus_percent": {
+      "maximum": 30
+    },
+    "supporting_characters": "Use only when they add value. Some episodes may contain Miko alone.",
+    "physical_action_required": true,
+    "dialogue_only_story": false,
+    "lesson_style": "The lesson should emerge naturally from the story and actions, not from a long lecture.",
+    "conflict_style": "Use small age-appropriate problems, surprises or misunderstandings that can be resolved positively.",
+    "ending": "Every episode should end with a warm, positive and emotionally satisfying moment.",
+    "complexity": "Simple enough for children ages 3-8 to understand.",
+    "language": "Use simple Indonesian words and short sentences.",
+    "visual_priority": "Stories must contain clear actions that can be visualized in animation.",
+    "repetition_control": "Avoid repeating the same combination of category, value, location, supporting character and main object too frequently."
+  },
+  "safety": {
+    "overall_rule": "All stories must be safe, wholesome, positive, child-friendly, age-appropriate, non-frightening and family-friendly.",
+    "prohibited_themes": [
+      "VIOLENCE",
+      "FIGHTING",
+      "WEAPONS",
+      "BLOOD",
+      "INJURY",
+      "HORROR",
+      "GORE",
+      "FRIGHTENING_SCENES",
+      "MONSTERS_THAT_ARE_DESIGNED_TO_SCARE",
+      "DANGEROUS_IMITATION",
+      "DANGEROUS_CHALLENGES",
+      "ADULT_THEMES",
+      "SEXUAL_CONTENT",
+      "POLITICS",
+      "RELIGIOUS_DEBATES",
+      "HATE",
+      "DISCRIMINATION",
+      "INAPPROPRIATE_LANGUAGE",
+      "PROFANITY",
+      "DISTURBING_IMAGERY",
+      "DEATH_AS_A_CENTRAL_THEME",
+      "CRUELTY_TO_ANIMALS",
+      "DANGEROUS_PRANKS"
+    ],
+    "regeneration_rule": "If a generated story violates a safety rule, reject it and regenerate the story."
+  },
+  "emotional_tone": [
+    "happy",
+    "curious",
+    "excited",
+    "surprised",
+    "confused",
+    "proud",
+    "playful",
+    "calm",
+    "grateful",
+    "kind",
+    "focused",
+    "slightly_worried",
+    "relieved",
+    "joyful"
+  ],
+  "story_quality_checks": [
+    "Miko is clearly the main character",
+    "The opening has a clear visual hook",
+    "The story is understandable for ages 3-8",
+    "The story contains physical action",
+    "The story has a clear beginning, middle and ending",
+    "The lesson is understandable",
+    "The lesson emerges naturally",
+    "The story is visually interesting",
+    "The story is safe and family-friendly",
+    "Supporting characters do not take over",
+    "The ending is positive",
+    "The story does not unnecessarily repeat recent episodes"
+  ],
+  "output_requirements": {
+    "format": "JSON",
+    "valid_json_only": true,
+    "required_fields": [
+      "episode",
+      "title",
+      "hook",
+      "lesson",
+      "scenes",
+      "voice_script",
+      "youtube"
+    ],
+    "scene_required_fields": [
+      "scene_number",
+      "duration",
+      "phase",
+      "story",
+      "action",
+      "dialogue",
+      "emotion"
+    ]
+  }
+}
