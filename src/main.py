@@ -7,15 +7,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from engines.story_engine import StoryEngine, StoryEngineError
-from engines.image_prompt_engine import (
-    ImagePromptEngine,
-    ImagePromptEngineError,
+from engines.image_prompt_engine import ImagePromptEngine, ImagePromptEngineError
+from engines.image_generation_engine import (
+    ImageGenerationEngine,
+    ImageGenerationError,
 )
 
 
 APP_NAME = "AI Shorts Video API"
-APP_VERSION = "0.3.0"
-
+APP_VERSION = "0.4.0"
 
 app = FastAPI(
     title=APP_NAME,
@@ -33,9 +33,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 story_engine = StoryEngine()
 image_prompt_engine = ImagePromptEngine()
+image_generation_engine = ImageGenerationEngine()
 
 
 class StoryGenerateRequest(BaseModel):
@@ -55,16 +55,28 @@ class ImagePromptRequest(BaseModel):
     language: str = Field(default="id", min_length=2, max_length=5)
 
 
+class ImageGenerateRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=12000)
+    negative_prompt: str = Field(default="", max_length=12000)
+    scene_number: int = Field(default=1, ge=1, le=99)
+    episode_id: Optional[str] = None
+    steps: int = Field(default=4, ge=1, le=8)
+    seed: Optional[int] = None
+    aspect_ratio: str = Field(default="9:16", min_length=3, max_length=10)
+    resolution: str = Field(default="1080x1920", min_length=5, max_length=20)
+
+
 @app.get("/")
 async def root():
     return {
-        "status": "online",
-        "application": APP_NAME,
+        "name": APP_NAME,
         "version": APP_VERSION,
-        "platform": "cloudflare-python-workers",
-        "engine": "story-engine",
-        "image_prompt_engine": image_prompt_engine.version,
-        "bible_storage": "embedded-python",
+        "status": "online",
+        "story_engine": "ready",
+        "image_prompt_engine": image_prompt_engine.VERSION,
+        "image_generation_engine": image_generation_engine.VERSION,
+        "image_provider": image_generation_engine.provider,
+        "image_model": image_generation_engine.model,
     }
 
 
@@ -74,45 +86,21 @@ async def health():
         "status": "healthy",
         "story_engine": "ready",
         "image_prompt_engine": "ready",
+        "image_generation_engine": "ready",
+        "image_provider": image_generation_engine.provider,
+        "image_model": image_generation_engine.model,
         "platform": "cloudflare-python-workers",
     }
 
 
 @app.get("/bibles")
 async def bibles():
-    return {
-        "character_bible": True,
-        "story_bible": True,
-        "world_bible": True,
-        "storage": "embedded-python",
-    }
+    return story_engine.get_bibles()
 
 
 @app.get("/story/options")
 async def story_options():
-    return {
-        "categories": story_engine.story_bible["categories"],
-        "core_values": story_engine.story_bible["core_values"],
-        "locations": [
-            {
-                "id": item["id"],
-                "name": item["name"],
-            }
-            for item in story_engine.world_bible["locations"]
-        ],
-        "supporting_characters": [
-            {
-                "id": item["id"],
-                "name": item["name"],
-                "species": item["species"],
-            }
-            for item in story_engine.character_bible[
-                "supporting_characters"
-            ]
-        ],
-        "languages": ["id", "en"],
-        "durations": [30, 45, 60, 90],
-    }
+    return story_engine.get_options()
 
 
 @app.post("/story/generate")
@@ -128,18 +116,13 @@ async def generate_story(request: StoryGenerateRequest):
             language=request.language,
             episode_id=request.episode_id,
         )
-
         return {
             "success": True,
-            "engine": "story-engine",
-            "version": APP_VERSION,
             "data": story,
         }
-
     except StoryEngineError as exc:
         return {
             "success": False,
-            "engine": "story-engine",
             "error": str(exc),
         }
 
@@ -147,50 +130,78 @@ async def generate_story(request: StoryGenerateRequest):
 @app.post("/story/image-prompts")
 async def generate_image_prompts(request: ImagePromptRequest):
     try:
-        story = dict(request.story)
-
-        if request.episode_id:
-            episode = dict(story.get("episode") or {})
-            episode["episode_id"] = request.episode_id
-            story["episode"] = episode
-
-        if request.language:
-            episode = dict(story.get("episode") or {})
-            episode.setdefault("language", request.language)
-            story["episode"] = episode
-
-        result = image_prompt_engine.generate_for_story(story)
-
-        return result
-
+        result = image_prompt_engine.generate_for_story(
+            story=request.story,
+            episode_id=request.episode_id,
+            language=request.language,
+        )
+        return {
+            "success": True,
+            **result,
+        }
     except ImagePromptEngineError as exc:
         return {
             "success": False,
-            "engine": "image-prompt-engine",
-            "version": image_prompt_engine.version,
             "error": str(exc),
         }
     except Exception as exc:
         return {
             "success": False,
-            "engine": "image-prompt-engine",
-            "version": image_prompt_engine.version,
             "error": f"Unexpected image prompt error: {exc}",
+        }
+
+
+@app.post("/images/generate")
+async def generate_image(request: ImageGenerateRequest):
+    try:
+        result = await image_generation_engine.generate(
+            prompt=request.prompt,
+            negative_prompt=request.negative_prompt,
+            steps=request.steps,
+            seed=request.seed,
+        )
+
+        return {
+            "success": True,
+            "scene_number": request.scene_number,
+            "episode_id": request.episode_id,
+            "aspect_ratio": request.aspect_ratio,
+            "resolution": request.resolution,
+            **result,
+        }
+
+    except ImageGenerationError as exc:
+        return {
+            "success": False,
+            "scene_number": request.scene_number,
+            "error": str(exc),
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "scene_number": request.scene_number,
+            "error": f"Unexpected image generation error: {exc}",
         }
 
 
 @app.get("/pipeline/status")
 async def pipeline_status():
     return {
-        "story_engine": "READY",
-        "image_prompt_engine": "READY",
-        "scene_engine": "PLANNED",
-        "video_engine": "PLANNED",
-        "voice_engine": "PLANNED",
-        "edit_engine": "PLANNED",
-        "qc_engine": "PLANNED",
-        "youtube_engine": "PLANNED",
-        "automation_engine": "PLANNED",
+        "story_engine": {
+            "status": "READY",
+            "version": getattr(story_engine, "VERSION", "1.0.0"),
+        },
+        "image_prompt_engine": {
+            "status": "READY",
+            "version": image_prompt_engine.VERSION,
+        },
+        "image_generation_engine": {
+            "status": "READY",
+            "version": image_generation_engine.VERSION,
+            "provider": image_generation_engine.provider,
+            "model": image_generation_engine.model,
+        },
+        "next_stage": "voice_generation",
     }
 
 
