@@ -476,6 +476,11 @@ function optionLabel(item) {
 }
 
 function populateSelect(select, items, placeholder = null) {
+    if (!select) {
+        console.warn("populateSelect: target select not found");
+        return;
+    }
+
     select.innerHTML = "";
 
     if (placeholder !== null) {
@@ -495,6 +500,11 @@ function populateSelect(select, items, placeholder = null) {
 
 function renderOptions(data) {
     const source = data && typeof data === "object" ? data : FALLBACK_OPTIONS;
+
+    if (!els.category || !els.coreValue || !els.location || !els.supportingCharacter || !els.duration) {
+        console.warn("renderOptions: Story Setup select elements are not ready yet.");
+        return false;
+    }
 
     populateSelect(els.category, source.categories || FALLBACK_OPTIONS.categories);
     populateSelect(els.coreValue, source.core_values || FALLBACK_OPTIONS.core_values);
@@ -521,6 +531,8 @@ function renderOptions(data) {
         const sixty = [...els.duration.options].findIndex(o => o.value === "60");
         els.duration.selectedIndex = sixty >= 0 ? sixty : 0;
     }
+
+    return true;
 }
 
 async function loadOptions() {
@@ -773,28 +785,50 @@ function bindEvents() {
 }
 
 async function init() {
-    bindEvents();
-    installMikoReferenceUIV4();
+    // IMPORTANT: populate Story Setup before optional UI patches.
+    // This prevents the Miko reference panel from blocking dropdown setup.
+    try {
+        renderOptions(FALLBACK_OPTIONS);
+    } catch (error) {
+        console.error("Initial Story Setup render failed:", error);
+    }
+
+    try {
+        bindEvents();
+    } catch (error) {
+        console.error("Event binding failed:", error);
+    }
+
+    try {
+        installMikoReferenceUIV4();
+    } catch (error) {
+        console.error("Miko reference UI failed:", error);
+    }
 
     if (!localStorage.getItem(CONFIG.storageKey) && CONFIG.defaultWorkerUrl) {
         localStorage.setItem(CONFIG.storageKey, CONFIG.defaultWorkerUrl);
     }
 
-    // Populate the UI immediately from the embedded Story Bible options.
+    // Re-render after all UI patches in case the page was initialized late.
     renderOptions(FALLBACK_OPTIONS);
 
-    // Health check is informational; it must never prevent the form from loading.
     const ok = await checkHealth();
 
     if (ok) {
         await loadOptions();
     } else {
-        setApiStatus("error", "API offline");
+        // Keep local Story Bible options available even when Worker is offline.
+        renderOptions(FALLBACK_OPTIONS);
+        setApiStatus("error", "API offline / local options ready");
     }
 }
 
 
-init();
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init, { once: true });
+} else {
+    init();
+}
 
 /* ============================================================
    MIKO CHARACTER CONSISTENCY + IMAGE GENERATION PATCH V4
