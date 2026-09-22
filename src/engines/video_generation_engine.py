@@ -1,29 +1,28 @@
 """
-Miko Video Generating Engine V2
-Cloudflare Workers AI / P-Video
+Miko Video Generation Engine V3
+Designed to plug directly into the user's current main.py.
 
-This version intentionally removes the R2 and fal.ai dependency.
+Expected main.py call:
 
-The generated Miko image is passed directly as a Base64 data URI to
-Cloudflare Workers AI. The P-Video model supports image-to-video and
-accepts an image as a URL or data URI.
+    engine = VideoGenerationEngine(env.AI)
+    data = await engine.generate(
+        image=request.image,
+        motion_prompt=request.motion_prompt,
+        duration=request.duration,
+        resolution=request.resolution,
+        fps=request.fps,
+        draft=request.draft,
+        seed=request.seed,
+        scene_number=request.scene_number,
+    )
 
-Model:
-    pruna/p-video
+No R2.
+No fal.ai.
+No ContextVar.
+No FastAPI imports.
+No Worker request/environment access.
 
-This keeps the architecture:
-
-Browser
-  -> Cloudflare Worker
-  -> Workers AI
-  -> video URL
-
-No R2 bucket and no fal.ai API key are required by this engine.
-
-IMPORTANT:
-Workers AI has a daily free allocation. Actual model usage consumes
-Neurons. The free allocation is not a guarantee that an unlimited number
-of videos can be generated for free.
+Workers AI binding is passed directly as `env.AI`.
 """
 
 from __future__ import annotations
@@ -35,25 +34,15 @@ class VideoGenerationError(Exception):
     """Base video generation error."""
 
 
-class VideoGenerationConfigurationError(VideoGenerationError):
-    """Workers AI binding is unavailable."""
-
-
 class VideoGenerationInputError(VideoGenerationError):
-    """Invalid video input."""
+    """Invalid video generation input."""
+
+
+class VideoGenerationConfigurationError(VideoGenerationError):
+    """Workers AI configuration error."""
 
 
 class VideoGenerationEngine:
-    """
-    Cloudflare Workers AI image-to-video engine.
-
-    Expected Worker binding:
-        AI
-
-    Model:
-        pruna/p-video
-    """
-
     MODEL = "pruna/p-video"
 
     DEFAULT_DURATION = 5
@@ -63,38 +52,36 @@ class VideoGenerationEngine:
 
     DEFAULT_NEGATIVE_PROMPT = (
         "flicker, jitter, unstable anatomy, deformed face, deformed paws, "
-        "extra limbs, duplicate character, changing fur color, changing "
-        "clothes, human, human child, human body, wrong animal species, "
-        "dog, fox, wolf, bear, rabbit, squirrel, horror, violence"
+        "extra limbs, extra legs, extra arms, duplicate character, "
+        "changing fur color, changing clothes, human, human child, "
+        "human body, humanoid, wrong animal species, dog, puppy, fox, "
+        "wolf, bear, rabbit, squirrel, scary scene, horror, violence, "
+        "blood, injury, weapon, frightening imagery"
     )
 
-    MIKO_MOTION_LOCK = (
-        "Keep Miko exactly consistent with the starting image. "
-        "Miko is a cute 3D animated orange-and-white male kitten with a "
-        "slightly oversized round feline head, small body, short feline "
-        "legs, fluffy orange tail, cat ears, whiskers, dark-brown feline "
-        "eyes, white muzzle and cheeks, white chest, white belly, white "
-        "paws and white tail tip. Miko wears the same bright blue hoodie "
-        "with white drawstrings and the same small paw pendant. "
-        "Do not transform Miko into a human or another animal. Preserve "
-        "the face, fur pattern, colors, clothing, body proportions and "
-        "environment from the starting image."
+    MIKO_CHARACTER_LOCK = (
+        "Miko must remain exactly the same character as the starting image. "
+        "Miko is a cute 3D animated male kitten/cat, orange-and-white fur, "
+        "slightly oversized round feline head, small kitten body, short "
+        "feline legs, triangular cat ears, dark-brown feline eyes, feline "
+        "nose, whiskers, white muzzle and cheeks, white chest, white belly, "
+        "white paws, white tail tip, fluffy orange feline tail. "
+        "Miko wears a bright blue hoodie with white drawstrings and a small "
+        "round paw pendant. Keep the same face, fur pattern, clothing, "
+        "body proportions and colors throughout the entire video. "
+        "Never turn Miko into a human or another animal."
     )
 
     def __init__(self, ai: Any):
         if ai is None:
             raise VideoGenerationConfigurationError(
-                "Workers AI binding 'AI' is not available."
+                "Workers AI binding 'AI' is unavailable."
             )
+
         self.ai = ai
 
-    @classmethod
-    def from_env(cls, env: Any) -> "VideoGenerationEngine":
-        ai = getattr(env, "AI", None)
-        return cls(ai)
-
     @staticmethod
-    def _validate_image(image: str) -> str:
+    def _validate_image(image: Any) -> str:
         if not isinstance(image, str) or not image.strip():
             raise VideoGenerationInputError(
                 "image is required."
@@ -102,14 +89,14 @@ class VideoGenerationEngine:
 
         value = image.strip()
 
-        allowed = (
-            value.startswith("data:image/png;base64,")
-            or value.startswith("data:image/jpeg;base64,")
-            or value.startswith("data:image/jpg;base64,")
-            or value.startswith("data:image/webp;base64,")
+        accepted_prefixes = (
+            "data:image/png;base64,",
+            "data:image/jpeg;base64,",
+            "data:image/jpg;base64,",
+            "data:image/webp;base64,",
         )
 
-        if not allowed:
+        if not value.startswith(accepted_prefixes):
             raise VideoGenerationInputError(
                 "image must be a PNG, JPEG or WebP Base64 data URI."
             )
@@ -117,72 +104,152 @@ class VideoGenerationEngine:
         return value
 
     @staticmethod
-    def _validate_duration(duration: Any) -> int:
+    def _validate_duration(value: Any) -> int:
         try:
-            value = int(duration)
+            duration = int(value)
         except (TypeError, ValueError) as exc:
             raise VideoGenerationInputError(
                 "duration must be an integer."
             ) from exc
 
-        if value < 1 or value > 20:
+        # P-Video is tested here with the 5-second workflow.
+        # Keep the public endpoint constrained to safe short-form values.
+        if duration not in {5, 10}:
             raise VideoGenerationInputError(
-                "duration must be between 1 and 20 seconds."
+                "For Miko V1, duration must be 5 or 10 seconds."
             )
 
-        return value
+        return duration
 
     @staticmethod
-    def _validate_resolution(resolution: str) -> str:
-        value = str(resolution or "720p").strip().lower()
+    def _validate_resolution(value: Any) -> str:
+        resolution = str(value or "720p").strip().lower()
 
-        if value not in {"720p", "1080p"}:
+        if resolution not in {"720p", "1080p"}:
             raise VideoGenerationInputError(
                 "resolution must be 720p or 1080p."
             )
 
-        return value
+        return resolution
 
     @staticmethod
-    def _validate_fps(fps: Any) -> int:
+    def _validate_fps(value: Any) -> int:
         try:
-            value = int(fps)
+            fps = int(value)
         except (TypeError, ValueError) as exc:
             raise VideoGenerationInputError(
                 "fps must be an integer."
             ) from exc
 
-        if value not in {24, 25, 30, 48}:
+        if fps not in {24, 25, 30}:
             raise VideoGenerationInputError(
-                "fps must be one of 24, 25, 30 or 48."
+                "fps must be 24, 25 or 30."
             )
 
-        return value
+        return fps
+
+    @staticmethod
+    def _validate_seed(value: Any) -> Optional[int]:
+        if value is None:
+            return None
+
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise VideoGenerationInputError(
+                "seed must be an integer."
+            ) from exc
 
     def build_prompt(self, motion_prompt: str) -> str:
         motion = (motion_prompt or "").strip()
 
         if not motion:
             motion = (
-                "Miko makes gentle natural movements, blinks naturally, "
-                "looks around curiously, and moves his fluffy tail softly. "
-                "The camera makes a subtle slow push-in."
+                "Miko gently looks around with curiosity, blinks naturally, "
+                "moves one paw softly, and gently moves his fluffy tail. "
+                "The camera performs a subtle slow push-in."
             )
 
         return (
-            f"{self.MIKO_MOTION_LOCK}\n\n"
-            f"Scene motion:\n{motion}\n\n"
-            "Animation direction: smooth children's animation, gentle "
-            "natural movement, stable anatomy, stable character identity, "
-            "coherent continuous motion, polished 3D animation, warm "
-            "family-friendly cinematic lighting. Avoid sudden motion."
+            f"{self.MIKO_CHARACTER_LOCK}\n\n"
+            "Animate the existing starting image. Do not redesign the "
+            "character or scene.\n\n"
+            f"Motion direction:\n{motion}\n\n"
+            "Use smooth, gentle, child-friendly 3D animation. "
+            "Preserve stable anatomy and stable character identity. "
+            "Use natural facial movement and subtle body motion. "
+            "Avoid sudden camera movement, scene changes, morphing, "
+            "character duplication, or object deformation."
         )
+
+    def _build_payload(
+        self,
+        *,
+        image: str,
+        motion_prompt: str,
+        duration: int,
+        resolution: str,
+        fps: int,
+        draft: bool,
+        seed: Optional[int],
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "prompt": self.build_prompt(motion_prompt),
+            "image": image,
+            "duration": duration,
+            "resolution": resolution,
+            "fps": fps,
+            "draft": bool(draft),
+            "save_audio": False,
+            "negative_prompt": self.DEFAULT_NEGATIVE_PROMPT,
+        }
+
+        if seed is not None:
+            payload["seed"] = seed
+
+        return payload
+
+    @staticmethod
+    def _extract_video_url(response: Any) -> Optional[str]:
+        """
+        Handle the common Workers AI response shapes without assuming
+        that every runtime serializes the result identically.
+        """
+        if isinstance(response, str):
+            if response.startswith(("http://", "https://")):
+                return response
+            return None
+
+        if isinstance(response, dict):
+            for key in ("video", "video_url", "url"):
+                value = response.get(key)
+
+                if isinstance(value, str) and value:
+                    return value
+
+                if isinstance(value, dict):
+                    nested = value.get("url")
+                    if isinstance(nested, str) and nested:
+                        return nested
+
+            result = response.get("result")
+            if isinstance(result, dict):
+                return VideoGenerationEngine._extract_video_url(result)
+
+        return None
+
+    @staticmethod
+    def _response_debug(response: Any) -> str:
+        try:
+            return repr(response)[:2000]
+        except Exception:
+            return "<unserializable Workers AI response>"
 
     async def generate(
         self,
         *,
         image: str,
-        motion_prompt: str,
+        motion_prompt: str = "",
         duration: int = DEFAULT_DURATION,
         resolution: str = DEFAULT_RESOLUTION,
         fps: int = DEFAULT_FPS,
@@ -190,60 +257,52 @@ class VideoGenerationEngine:
         seed: Optional[int] = None,
         scene_number: Optional[int] = None,
     ) -> dict[str, Any]:
-        """
-        Generate a video directly through Workers AI.
-
-        `image` is the generated Miko scene image data URI already held
-        by the browser/frontend.
-        """
         image = self._validate_image(image)
         duration = self._validate_duration(duration)
         resolution = self._validate_resolution(resolution)
         fps = self._validate_fps(fps)
+        seed = self._validate_seed(seed)
 
-        prompt = self.build_prompt(motion_prompt)
-
-        payload: dict[str, Any] = {
-            "prompt": prompt,
-            "image": image,
-            "duration": duration,
-            "resolution": resolution,
-            "fps": fps,
-            "draft": bool(draft),
-            "save_audio": False,
-            "prompt_upsampling": True,
-        }
-
-        if seed is not None:
-            payload["seed"] = int(seed)
+        payload = self._build_payload(
+            image=image,
+            motion_prompt=motion_prompt,
+            duration=duration,
+            resolution=resolution,
+            fps=fps,
+            draft=draft,
+            seed=seed,
+        )
 
         try:
-            response = await self.ai.run(self.MODEL, payload)
+            response = await self.ai.run(
+                self.MODEL,
+                payload,
+            )
         except Exception as exc:
             message = str(exc)
-            if "quota" in message.lower() or "allocation" in message.lower():
+
+            lowered = message.lower()
+
+            if (
+                "quota" in lowered
+                or "allocation" in lowered
+                or "neurons" in lowered
+            ):
                 raise VideoGenerationError(
-                    "Workers AI free allocation/quota was reached. "
-                    "Try again after the daily reset or reduce usage."
+                    "Workers AI quota/free allocation was reached. "
+                    f"Original error: {message}"
                 ) from exc
 
             raise VideoGenerationError(
-                f"Workers AI video generation failed: {message}"
+                f"Workers AI P-Video generation failed: {message}"
             ) from exc
 
-        video_url = None
-
-        if isinstance(response, dict):
-            video_url = response.get("video")
-
-            if not video_url:
-                result = response.get("result")
-                if isinstance(result, dict):
-                    video_url = result.get("video")
+        video_url = self._extract_video_url(response)
 
         if not video_url:
             raise VideoGenerationError(
-                f"Workers AI returned no video URL. Response: {response}"
+                "P-Video returned no video URL. "
+                f"Raw response: {self._response_debug(response)}"
             )
 
         return {
@@ -257,7 +316,8 @@ class VideoGenerationEngine:
             "fps": fps,
             "draft": bool(draft),
             "audio": False,
-            "character_lock": "MIKO_STRICT",
+            "character_identity": "MIKO_CAT",
+            "character_lock": "STRICT",
             "status": "COMPLETED",
         }
 
@@ -265,6 +325,6 @@ class VideoGenerationEngine:
 __all__ = [
     "VideoGenerationEngine",
     "VideoGenerationError",
-    "VideoGenerationConfigurationError",
     "VideoGenerationInputError",
+    "VideoGenerationConfigurationError",
 ]
