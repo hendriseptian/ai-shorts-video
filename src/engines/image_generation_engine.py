@@ -20,7 +20,7 @@ class ImageGenerationEngine:
     """
 
     MODEL = "@cf/bytedance/stable-diffusion-xl-lightning"
-    VERSION = "2.0.0"
+    VERSION = "2.0.1"
     DEFAULT_STEPS = 4
     MAX_STEPS = 20
     MAX_PROMPT_LENGTH = 2048
@@ -115,7 +115,14 @@ class ImageGenerationEngine:
         return None
 
     async def _extract_base64(self, result: Any) -> str | None:
-        """Handle both object-style and stream/bytes-style Workers AI output."""
+        """Extract image bytes from the Workers AI ReadableStream.
+
+        SDXL-Lightning returns a ReadableStream. In Python Workers, the most
+        reliable way to consume that stream is to wrap it in the Fetch API
+        Response, read its ArrayBuffer, then convert the ArrayBuffer to bytes.
+        """
+
+        # Some models/runtimes may return an object containing base64 directly.
         for key in ("image", "image_b64", "image_base64"):
             value = self._get_value(result, key)
             if value:
@@ -124,22 +131,21 @@ class ImageGenerationEngine:
                 if isinstance(value, (bytes, bytearray, memoryview)):
                     return base64.b64encode(bytes(value)).decode("ascii")
 
-        if isinstance(result, (bytes, bytearray, memoryview)):
-            return base64.b64encode(bytes(result)).decode("ascii")
+        # SDXL-Lightning currently returns a ReadableStream. Use the native
+        # Workers Fetch Response API to consume the stream completely.
+        try:
+            from js import Response as JSResponse
 
-        # Some Workers AI image models return a JS ReadableStream. The
-        # Python Workers runtime can expose async arrayBuffer()/bytes()-like
-        # methods depending on the runtime version.
-        for method_name in ("arrayBuffer", "bytes"):
-            try:
-                method = getattr(result, method_name)
-                data = method()
-                if hasattr(data, "__await__"):
-                    data = await data
-                if isinstance(data, (bytes, bytearray, memoryview)):
-                    return base64.b64encode(bytes(data)).decode("ascii")
-            except Exception:
-                continue
+            response = JSResponse.new(result)
+            array_buffer = await response.arrayBuffer()
+            raw_bytes = array_buffer.to_bytes()
+
+            if raw_bytes:
+                return base64.b64encode(raw_bytes).decode("ascii")
+        except Exception as exc:
+            raise ImageGenerationError(
+                f"Could not read generated image stream: {exc}"
+            ) from exc
 
         return None
 
