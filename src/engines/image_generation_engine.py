@@ -1,230 +1,255 @@
 from __future__ import annotations
 
 import base64
-from typing import Any
+import binascii
+import json
+from typing import Any, Optional
+
+from js import Blob, FormData, Response, Uint8Array
 
 
-class ImageGenerationError(Exception):
-    """Base error for image generation."""
+MODEL = "@cf/black-forest-labs/flux-2-klein-4b"
+DEFAULT_WIDTH = 576
+DEFAULT_HEIGHT = 1024
+
+
+MIKO_HARD_LOCK = """
+SUBJECT IDENTITY IS ABSOLUTE.
+
+Miko is a CUTE 3D ANIMATED MALE KITTEN / CAT.
+Miko MUST be visibly and unmistakably a FELINE.
+Miko is NOT a human child, NOT a human boy, NOT a person, and NOT a humanoid human.
+
+Miko's permanent visual identity:
+- orange-and-white kitten fur
+- feline head and face
+- triangular cat ears
+- feline muzzle and small cat nose
+- visible whiskers
+- large dark-brown feline eyes
+- fluffy orange fur
+- white muzzle, cheeks, chest, belly, paws and tail tip
+- small kitten body
+- short feline legs
+- four furry cat paws
+- long fluffy feline tail
+- bright blue hoodie with white drawstrings
+- small round paw pendant
+- no shoes
+- no human skin
+- no human hair
+
+The character must remain a CAT in every scene even when standing, walking,
+playing, holding an object, or interacting with other characters.
+Do not reinterpret Miko as a human child or humanoid person.
+"""
+
+
+MIKO_NEGATIVE_LOCK = """
+human, person, human child, human boy, human girl, human face, human body,
+human anatomy, human skin, human hair, human hands, human feet, human arms,
+human legs, humanoid human, realistic person, live action human,
+human-like face, human-like body, human character,
+dog, puppy, fox, wolf, bear, rabbit, squirrel, other animal as Miko,
+wrong species, different species, creature without feline features,
+missing cat ears, missing whiskers, missing tail,
+clothing other than blue hoodie, shoes on Miko,
+adult, violence, blood, injury, horror, gore, frightening scene,
+weapons, politics, sexual content, profanity, disturbing imagery
+"""
+
+
+class ImageGenerationEngineError(Exception):
+    pass
+
+
+def _decode_data_uri(value: str) -> tuple[bytes, str]:
+    if not value or not isinstance(value, str):
+        raise ImageGenerationEngineError("Miko reference image is required.")
+
+    raw = value.strip()
+    if "," not in raw or not raw.startswith("data:image/"):
+        raise ImageGenerationEngineError(
+            "Miko reference must be a PNG/JPEG data URL."
+        )
+
+    header, payload = raw.split(",", 1)
+    mime = header[5:].split(";", 1)[0].lower()
+
+    if mime not in {"image/png", "image/jpeg", "image/webp"}:
+        raise ImageGenerationEngineError(
+            "Miko reference must be PNG, JPEG, or WebP."
+        )
+
+    try:
+        return base64.b64decode(payload, validate=True), mime
+    except (binascii.Error, ValueError) as exc:
+        raise ImageGenerationEngineError(
+            "Miko reference image is not valid Base64."
+        ) from exc
+
+
+def _bytes_to_uint8(data: bytes):
+    # Pyodide FFI: construct a JavaScript Uint8Array from Python bytes.
+    return Uint8Array.new(data)
+
+
+async def _run_flux2_with_reference(
+    ai,
+    prompt: str,
+    reference_bytes: bytes,
+    reference_mime: str,
+    width: int,
+    height: int,
+    seed: Optional[int] = None,
+):
+    """
+    FLUX.2 Klein 4B uses multipart input on Workers AI.
+    The reference image is sent as input_image_0.
+    """
+    blob = Blob.new([_bytes_to_uint8(reference_bytes)], {"type": reference_mime})
+
+    form = FormData.new()
+    form.append("prompt", prompt)
+    form.append("input_image_0", blob, "miko-reference")
+    form.append("width", str(width))
+    form.append("height", str(height))
+    if seed is not None:
+        form.append("seed", str(seed))
+
+    # Cloudflare's documented Workers AI multipart pattern:
+    # serialize FormData through a Response, then pass the stream + content type.
+    form_response = Response.new(form)
+    body = form_response.body
+    content_type = form_response.headers.get("content-type")
+
+    result = await ai.run(
+        MODEL,
+        {
+            "multipart": {
+                "body": body,
+                "contentType": content_type,
+            }
+        },
+    )
+    return result
+
+
+def _extract_image(result: Any) -> Optional[str]:
+    if result is None:
+        return None
+
+    # Most current FLUX.2 Workers AI responses expose result.image.
+    image = getattr(result, "image", None)
+    if image:
+        return str(image)
+
+    if isinstance(result, dict):
+        image = result.get("image")
+        if image:
+            return image
+
+    return None
 
 
 class ImageGenerationEngine:
-    """
-    Cloudflare Workers AI image generation engine for vertical Shorts.
+    version = "0.4.0"
+    provider = "cloudflare-workers-ai"
+    model = MODEL
 
-    Provider:
-        @cf/bytedance/stable-diffusion-xl-lightning
-
-    This model supports explicit width/height, so the backend requests an
-    actual 9:16 canvas instead of merely labeling a square image as 9:16.
-    """
-
-    MODEL = "@cf/bytedance/stable-diffusion-xl-lightning"
-    VERSION = "2.0.1"
-    DEFAULT_STEPS = 4
-    MAX_STEPS = 20
-    MAX_PROMPT_LENGTH = 2048
-
-    # Development/final-friendly vertical canvas. Exact 9:16 ratio.
-    DEFAULT_WIDTH = 576
-    DEFAULT_HEIGHT = 1024
-
-    def __init__(self) -> None:
-        self.provider = "cloudflare-workers-ai"
-        self.model = self.MODEL
-
-    def status(self) -> dict[str, Any]:
-        return {
-            "ready": True,
-            "provider": self.provider,
-            "model": self.model,
-            "version": self.VERSION,
-            "output": "base64-data-uri",
-            "aspect_ratio_target": "9:16",
-            "width": self.DEFAULT_WIDTH,
-            "height": self.DEFAULT_HEIGHT,
-        }
-
-    @staticmethod
-    def _clean_prompt(prompt: str) -> str:
-        value = str(prompt or "").strip()
-        if not value:
-            raise ImageGenerationError("Image prompt is required.")
-        if len(value) > ImageGenerationEngine.MAX_PROMPT_LENGTH:
-            value = value[: ImageGenerationEngine.MAX_PROMPT_LENGTH]
-        return value
-
-    @staticmethod
-    def _clean_negative_prompt(prompt: str) -> str:
-        value = str(prompt or "").strip()
-        if len(value) > ImageGenerationEngine.MAX_PROMPT_LENGTH:
-            value = value[: ImageGenerationEngine.MAX_PROMPT_LENGTH]
-        return value
-
-    @staticmethod
-    def _parse_resolution(resolution: str) -> tuple[int, int]:
-        """Return a safe exact-9:16 resolution; fall back to 576x1024."""
-        try:
-            raw = str(resolution or "").lower().replace(" ", "")
-            if "x" in raw:
-                w_text, h_text = raw.split("x", 1)
-                width = int(w_text)
-                height = int(h_text)
-            else:
-                raise ValueError
-        except Exception:
-            return ImageGenerationEngine.DEFAULT_WIDTH, ImageGenerationEngine.DEFAULT_HEIGHT
-
-        # We intentionally constrain output to a stable 9:16 canvas.
-        # Keep the requested size only if it is an exact 9:16 ratio and
-        # within the model's documented 256..2048 range.
-        if width < 256 or height < 256 or width > 2048 or height > 2048:
-            return ImageGenerationEngine.DEFAULT_WIDTH, ImageGenerationEngine.DEFAULT_HEIGHT
-
-        if width * 16 != height * 9:
-            return ImageGenerationEngine.DEFAULT_WIDTH, ImageGenerationEngine.DEFAULT_HEIGHT
-
-        # Model dimensions are safest when divisible by 8.
-        width = (width // 8) * 8
-        height = (height // 8) * 8
-
-        if width * 16 != height * 9 or width < 256 or height < 256:
-            return ImageGenerationEngine.DEFAULT_WIDTH, ImageGenerationEngine.DEFAULT_HEIGHT
-
-        return width, height
-
-    @staticmethod
-    def _get_value(result: Any, key: str) -> Any:
-        try:
-            value = getattr(result, key)
-            if value is not None:
-                return value
-        except Exception:
-            pass
-        try:
-            if isinstance(result, dict):
-                return result.get(key)
-        except Exception:
-            pass
-        try:
-            value = result[key]
-            if value is not None:
-                return value
-        except Exception:
-            pass
-        return None
-
-    async def _extract_base64(self, result: Any) -> str | None:
-        """Extract image bytes from the Workers AI ReadableStream.
-
-        SDXL-Lightning returns a ReadableStream. In Python Workers, the most
-        reliable way to consume that stream is to wrap it in the Fetch API
-        Response, read its ArrayBuffer, then convert the ArrayBuffer to bytes.
-        """
-
-        # Some models/runtimes may return an object containing base64 directly.
-        for key in ("image", "image_b64", "image_base64"):
-            value = self._get_value(result, key)
-            if value:
-                if isinstance(value, str):
-                    return value
-                if isinstance(value, (bytes, bytearray, memoryview)):
-                    return base64.b64encode(bytes(value)).decode("ascii")
-
-        # SDXL-Lightning currently returns a ReadableStream. Use the native
-        # Workers Fetch Response API to consume the stream completely.
-        try:
-            from js import Response as JSResponse
-
-            response = JSResponse.new(result)
-            array_buffer = await response.arrayBuffer()
-            raw_bytes = array_buffer.to_bytes()
-
-            if raw_bytes:
-                return base64.b64encode(raw_bytes).decode("ascii")
-        except Exception as exc:
-            raise ImageGenerationError(
-                f"Could not read generated image stream: {exc}"
-            ) from exc
-
-        return None
+    def __init__(self, ai=None):
+        self.ai = ai
 
     async def generate(
         self,
+        *,
         prompt: str,
         negative_prompt: str = "",
-        steps: int = DEFAULT_STEPS,
-        seed: int | None = None,
-        resolution: str = "576x1024",
+        reference_image: str,
+        width: int = DEFAULT_WIDTH,
+        height: int = DEFAULT_HEIGHT,
+        seed: Optional[int] = None,
+        scene_number: Optional[int] = None,
     ) -> dict[str, Any]:
-        try:
-            from workers import env
-        except Exception as exc:
-            raise ImageGenerationError(
-                f"Workers AI binding is unavailable: {exc}"
-            ) from exc
+        if self.ai is None:
+            raise ImageGenerationEngineError("Workers AI binding is not configured.")
 
-        clean_prompt = self._clean_prompt(prompt)
-        clean_negative = self._clean_negative_prompt(negative_prompt)
-        width, height = self._parse_resolution(resolution)
+        if not prompt.strip():
+            raise ImageGenerationEngineError("Image prompt is empty.")
 
-        try:
-            steps_value = int(steps)
-        except (TypeError, ValueError):
-            steps_value = self.DEFAULT_STEPS
-        steps_value = max(1, min(self.MAX_STEPS, steps_value))
+        if width != 576 or height != 1024:
+            # Keep the first consistency test deterministic.
+            width, height = DEFAULT_WIDTH, DEFAULT_HEIGHT
 
-        payload: dict[str, Any] = {
-            "prompt": clean_prompt,
-            "width": width,
-            "height": height,
-            "num_steps": steps_value,
-        }
+        reference_bytes, reference_mime = _decode_data_uri(reference_image)
 
-        if clean_negative:
-            payload["negative_prompt"] = clean_negative
+        full_prompt = f"""
+{MIKO_HARD_LOCK}
 
-        if seed is not None:
-            try:
-                payload["seed"] = int(seed)
-            except (TypeError, ValueError):
-                pass
+REFERENCE IMAGE RULE:
+The attached reference image is the MASTER VISUAL REFERENCE for Miko.
+Use the same kitten identity, species, fur pattern, face, eyes, ears,
+muzzle, tail, body proportions, and blue hoodie from the reference.
+Preserve Miko as a cat. Do not redesign Miko.
 
-        try:
-            result = await env.AI.run(self.MODEL, payload)
-        except Exception as exc:
-            message = str(exc)
-            if "quota" in message.lower() or "neuron" in message.lower():
-                raise ImageGenerationError(
-                    "Workers AI image generation quota was reached. "
-                    "Please check Workers AI usage/quota and try again later."
-                ) from exc
-            raise ImageGenerationError(
-                f"Workers AI image generation failed: {message}"
-            ) from exc
+SCENE REQUEST:
+{prompt}
 
-        image_base64 = await self._extract_base64(result)
-        if not image_base64:
-            raise ImageGenerationError(
-                "Workers AI returned no image data. "
-                "The model response format may have changed."
+VISUAL REQUIREMENTS:
+polished stylized 3D children's animation, rounded proportions,
+soft fluffy fur, expressive animation, bright warm lighting,
+wholesome family-friendly atmosphere, clean cinematic composition,
+vertical 9:16 composition, Miko clearly visible and large enough.
+
+Do not add written text, captions, logos, or watermarks.
+""".strip()
+
+        full_negative = f"""
+{MIKO_NEGATIVE_LOCK}
+{negative_prompt}
+""".strip()
+
+        # FLUX.2 Klein uses the positive prompt for generation. Keep the
+        # negative lock in the prompt itself so the species constraint remains
+        # explicit even though the model does not expose a native negative_prompt.
+        final_prompt = f"""
+{full_prompt}
+
+ABSOLUTE AVOID LIST:
+{full_negative}
+""".strip()
+
+        result = await _run_flux2_with_reference(
+            self.ai,
+            final_prompt,
+            reference_bytes,
+            reference_mime,
+            width,
+            height,
+            seed,
+        )
+
+        image = _extract_image(result)
+        if not image:
+            raise ImageGenerationEngineError(
+                "FLUX.2 returned no image. Check the Workers AI response."
             )
+
+        if not image.startswith("data:image/"):
+            image = f"data:image/png;base64,{image}"
 
         return {
             "success": True,
+            "scene_number": scene_number,
             "provider": self.provider,
             "model": self.model,
-            "engine_version": self.VERSION,
-            "data_uri": f"data:image/jpeg;base64,{image_base64}",
-            "image_base64": image_base64,
-            "mime_type": "image/jpeg",
-            "aspect_ratio": "9:16",
-            "resolution": f"{width}x{height}",
             "width": width,
             "height": height,
-            "steps": steps_value,
-            "seed": payload.get("seed"),
+            "resolution": f"{width}x{height}",
+            "aspect_ratio": "9:16",
+            "image": image,
+            "character_reference_used": True,
+            "character_identity": "MIKO_CAT",
+            "character_lock": "STRICT",
+            "negative_prompt": full_negative,
         }
-
-
-image_generation_engine = ImageGenerationEngine()
