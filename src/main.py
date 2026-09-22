@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,12 +10,12 @@ from engines.story_engine import StoryEngine, StoryEngineError
 from engines.image_prompt_engine import ImagePromptEngine, ImagePromptEngineError
 from engines.image_generation_engine import (
     ImageGenerationEngine,
-    ImageGenerationError,
+    ImageGenerationEngineError,
 )
 
 
 APP_NAME = "AI Shorts Video API"
-APP_VERSION = "0.5.1"
+APP_VERSION = "0.4.0"
 
 app = FastAPI(
     title=APP_NAME,
@@ -35,7 +35,6 @@ app.add_middleware(
 
 story_engine = StoryEngine()
 image_prompt_engine = ImagePromptEngine()
-image_generation_engine = ImageGenerationEngine()
 
 
 class StoryGenerateRequest(BaseModel):
@@ -50,20 +49,19 @@ class StoryGenerateRequest(BaseModel):
 
 
 class ImagePromptRequest(BaseModel):
-    story: dict[str, Any]
+    story: dict
     episode_id: Optional[str] = None
     language: str = Field(default="id", min_length=2, max_length=5)
 
 
 class ImageGenerateRequest(BaseModel):
-    prompt: str = Field(min_length=1, max_length=12000)
-    negative_prompt: str = Field(default="", max_length=12000)
-    scene_number: int = Field(default=1, ge=1, le=99)
-    episode_id: Optional[str] = None
-    steps: int = Field(default=4, ge=1, le=8)
+    prompt: str
+    negative_prompt: str = ""
+    reference_image: str
+    width: int = Field(default=576, ge=256, le=1920)
+    height: int = Field(default=1024, ge=256, le=1920)
     seed: Optional[int] = None
-    aspect_ratio: str = Field(default="9:16", min_length=3, max_length=10)
-    resolution: str = Field(default="1080x1920", min_length=5, max_length=20)
+    scene_number: Optional[int] = None
 
 
 @app.get("/")
@@ -71,12 +69,13 @@ async def root():
     return {
         "name": APP_NAME,
         "version": APP_VERSION,
-        "status": "online",
         "story_engine": "ready",
-        "image_prompt_engine": image_prompt_engine.VERSION,
-        "image_generation_engine": image_generation_engine.VERSION,
-        "image_provider": image_generation_engine.provider,
-        "image_model": image_generation_engine.model,
+        "image_prompt_engine": "ready",
+        "image_generation_engine": "ready",
+        "image_provider": "cloudflare-workers-ai",
+        "image_model": "@cf/black-forest-labs/flux-2-klein-4b",
+        "character_identity": "MIKO_CAT",
+        "character_reference": "required",
     }
 
 
@@ -87,8 +86,10 @@ async def health():
         "story_engine": "ready",
         "image_prompt_engine": "ready",
         "image_generation_engine": "ready",
-        "image_provider": image_generation_engine.provider,
-        "image_model": image_generation_engine.model,
+        "image_provider": "cloudflare-workers-ai",
+        "image_model": "@cf/black-forest-labs/flux-2-klein-4b",
+        "character_identity": "MIKO_CAT",
+        "character_reference": "required",
         "platform": "cloudflare-python-workers",
     }
 
@@ -106,7 +107,7 @@ async def story_options():
 @app.post("/story/generate")
 async def generate_story(request: StoryGenerateRequest):
     try:
-        story = story_engine.generate_story(
+        data = story_engine.generate_story(
             category=request.category,
             core_value=request.core_value,
             location=request.location,
@@ -116,97 +117,87 @@ async def generate_story(request: StoryGenerateRequest):
             language=request.language,
             episode_id=request.episode_id,
         )
-        return {
-            "success": True,
-            "data": story,
-        }
+        return {"success": True, "data": data}
     except StoryEngineError as exc:
-        return {
-            "success": False,
-            "error": str(exc),
-        }
+        return {"success": False, "error": str(exc)}
 
 
 @app.post("/story/image-prompts")
 async def generate_image_prompts(request: ImagePromptRequest):
     try:
-        # ImagePromptEngine derives episode_id and language directly
-        # from the story payload. Keep this call compatible with the
-        # Cloudflare-safe engine signature.
-        result = image_prompt_engine.generate_for_story(
-            story=request.story,
-        )
-        return {
-            "success": True,
-            **result,
-        }
+        data = image_prompt_engine.generate_for_story(request.story)
+        return {"success": True, **data}
     except ImagePromptEngineError as exc:
-        return {
-            "success": False,
-            "error": str(exc),
-        }
+        return {"success": False, "error": str(exc)}
     except Exception as exc:
-        return {
-            "success": False,
-            "error": f"Unexpected image prompt error: {exc}",
-        }
+        return {"success": False, "error": f"Unexpected image prompt error: {exc}"}
 
 
 @app.post("/images/generate")
 async def generate_image(request: ImageGenerateRequest):
     try:
-        result = await image_generation_engine.generate(
+        # FastAPI's ASGI entrypoint exposes the binding through the Worker env.
+        # We inject it at request time below.
+        engine = ImageGenerationEngine(_get_ai_binding())
+        data = await engine.generate(
             prompt=request.prompt,
             negative_prompt=request.negative_prompt,
-            steps=request.steps,
+            reference_image=request.reference_image,
+            width=request.width,
+            height=request.height,
             seed=request.seed,
-            resolution=request.resolution,
+            scene_number=request.scene_number,
         )
-
-        return {
-            "success": True,
-            "scene_number": request.scene_number,
-            "episode_id": request.episode_id,
-            "aspect_ratio": request.aspect_ratio,
-            "resolution": request.resolution,
-            **result,
-        }
-
-    except ImageGenerationError as exc:
-        return {
-            "success": False,
-            "scene_number": request.scene_number,
-            "error": str(exc),
-        }
+        return data
+    except ImageGenerationEngineError as exc:
+        return {"success": False, "error": str(exc)}
     except Exception as exc:
-        return {
-            "success": False,
-            "scene_number": request.scene_number,
-            "error": f"Unexpected image generation error: {exc}",
-        }
+        return {"success": False, "error": f"Image generation error: {exc}"}
 
 
 @app.get("/pipeline/status")
 async def pipeline_status():
     return {
-        "story_engine": {
-            "status": "READY",
-            "version": getattr(story_engine, "VERSION", "1.0.0"),
-        },
-        "image_prompt_engine": {
-            "status": "READY",
-            "version": image_prompt_engine.VERSION,
-        },
-        "image_generation_engine": {
-            "status": "READY",
-            "version": image_generation_engine.VERSION,
-            "provider": image_generation_engine.provider,
-            "model": image_generation_engine.model,
-        },
-        "next_stage": "voice_generation",
+        "story_engine": "ready",
+        "image_prompt_engine": "ready",
+        "image_generation_engine": "ready",
+        "image_provider": "cloudflare-workers-ai",
+        "image_model": "@cf/black-forest-labs/flux-2-klein-4b",
+        "character_identity": "MIKO_CAT",
+        "character_reference": "required",
+        "aspect_ratio": "9:16",
+        "resolution": "576x1024",
     }
 
 
+def _get_ai_binding():
+    """
+    FastAPI on Python Workers is wrapped by workers.asgi. The Worker
+    environment is available through the ASGI scope. This helper is replaced
+    at runtime by reading the binding from the current request environment.
+    """
+    # This function is intentionally resolved through the ASGI environment.
+    # The ASGI adapter exposes bindings in scope["env"].
+    from contextvars import ContextVar
+    env = _request_env.get()
+    if env is None:
+        raise ImageGenerationEngineError("Workers AI binding is unavailable.")
+    return env.AI
+
+
+_request_env: ContextVar = ContextVar("request_env", default=None)
+
+# Wrap the FastAPI ASGI app so the current Worker env is available to
+# /images/generate. This keeps the existing FastAPI architecture intact.
 from workers import asgi
 
-Default = asgi.entrypoint(app)
+
+_asgi_app = asgi.entrypoint(app)
+
+
+async def _wrapped(scope, receive, send):
+    _request_env.set(scope.get("env"))
+    return await _asgi_app(scope, receive, send)
+
+
+Default = _wrapped
