@@ -9,6 +9,40 @@ const CONFIG = {
     }
 };
 
+const FALLBACK_OPTIONS = {
+    categories: [
+        "ADVENTURE", "FUNNY", "FRIENDSHIP", "DISCOVERY", "LEARNING",
+        "HELPING_OTHERS", "ANIMAL_FRIENDS", "NATURE", "SIMPLE_PROBLEM_SOLVING",
+        "EVERYDAY_LIFE", "IMAGINATION", "MUSIC_AND_PLAY"
+    ],
+    core_values: [
+        "KINDNESS", "SHARING", "HONESTY", "COURAGE", "PATIENCE", "CURIOSITY",
+        "HELPING_OTHERS", "RESPECT", "CLEANLINESS", "TEAMWORK",
+        "PROBLEM_SOLVING", "LEARNING_FROM_MISTAKES", "RESPONSIBILITY",
+        "EMPATHY", "GRATITUDE", "SELF_CONFIDENCE", "TAKING_CARE_OF_NATURE"
+    ],
+    locations: [
+        { id: "MIKOS_HOUSE", name: "Miko's House" },
+        { id: "RAINBOW_PARK", name: "Rainbow Park" },
+        { id: "SUNNY_FOREST", name: "Sunny Forest" },
+        { id: "SUNNY_BEACH", name: "Sunny Beach" },
+        { id: "LITTLE_SCHOOL", name: "Little School" },
+        { id: "PLAYGROUND", name: "Playground" },
+        { id: "FLOWER_GARDEN", name: "Flower Garden" },
+        { id: "LITTLE_FARM", name: "Little Farm" },
+        { id: "CLOUD_HILL", name: "Cloud Hill" },
+        { id: "MIKOS_NIGHT_GARDEN", name: "Miko's Night Garden" }
+    ],
+    supporting_characters: [
+        { id: "LULU", name: "Lulu — Rabbit" },
+        { id: "BOBI", name: "Bobi — Bear" },
+        { id: "KIKI", name: "Kiki — Bird" },
+        { id: "TOTO", name: "Toto — Turtle" },
+        { id: "NANA", name: "Nana — Squirrel" }
+    ],
+    durations: [30, 45, 60, 90]
+};
+
 const $ = (selector) => document.querySelector(selector);
 
 const els = {
@@ -116,11 +150,25 @@ async function fetchJson(path, options = {}) {
         headers["Content-Type"] = "application/json";
     }
 
-    const response = await fetch(apiUrl(path), {
-        ...options,
-        method,
-        headers
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    let response;
+    try {
+        response = await fetch(apiUrl(path), {
+            ...options,
+            method,
+            headers,
+            signal: controller.signal
+        });
+    } catch (error) {
+        if (error.name === "AbortError") {
+            throw new Error("API request timed out after 10 seconds.");
+        }
+        throw new Error(`Cannot reach Worker API: ${error.message}`);
+    } finally {
+        clearTimeout(timeoutId);
+    }
 
     let payload = null;
     try {
@@ -166,39 +214,52 @@ function populateSelect(select, items, placeholder = null) {
     });
 }
 
-async function loadOptions() {
-    setApiStatus("checking", "Loading options...");
+function renderOptions(data) {
+    const source = data && typeof data === "object" ? data : FALLBACK_OPTIONS;
 
-    const data = await fetchJson(CONFIG.endpoints.options);
-
-    if (!data || typeof data !== "object") {
-        throw new Error("Invalid /story/options response.");
-    }
-
-    populateSelect(els.category, data.categories || []);
-    populateSelect(els.coreValue, data.core_values || []);
-    populateSelect(els.location, data.locations || []);
+    populateSelect(els.category, source.categories || FALLBACK_OPTIONS.categories);
+    populateSelect(els.coreValue, source.core_values || FALLBACK_OPTIONS.core_values);
+    populateSelect(els.location, source.locations || FALLBACK_OPTIONS.locations);
     populateSelect(
         els.supportingCharacter,
-        data.supporting_characters || [],
+        source.supporting_characters || FALLBACK_OPTIONS.supporting_characters,
         "Miko only"
     );
 
-    const durations = data.durations?.length ? data.durations : [30, 45, 60, 90];
-    populateSelect(els.duration, durations.map((value) => ({
-        id: value,
-        name: `${value} seconds`
-    })));
+    const durations = source.durations?.length
+        ? source.durations
+        : FALLBACK_OPTIONS.durations;
+
+    populateSelect(
+        els.duration,
+        durations.map((value) => ({ id: value, name: `${value} seconds` }))
+    );
 
     if (els.category.options.length) els.category.selectedIndex = 0;
     if (els.coreValue.options.length) els.coreValue.selectedIndex = 0;
     if (els.location.options.length) els.location.selectedIndex = 0;
-
-    if (!els.category.options.length || !els.coreValue.options.length || !els.location.options.length) {
-        throw new Error("Worker responded, but story options are empty.");
+    if (els.duration.options.length) {
+        const sixty = [...els.duration.options].findIndex(o => o.value === "60");
+        els.duration.selectedIndex = sixty >= 0 ? sixty : 0;
     }
+}
 
-    setApiStatus("ok", "API connected");
+async function loadOptions() {
+    // Render immediately. This makes the form usable even when index.html
+    // is opened directly from file:// and the browser blocks cross-origin fetch.
+    renderOptions(FALLBACK_OPTIONS);
+
+    try {
+        const data = await fetchJson(CONFIG.endpoints.options);
+        renderOptions(data);
+        setApiStatus("ok", "API connected");
+        return true;
+    } catch (error) {
+        console.warn("Could not load /story/options; using built-in options.", error);
+        // Keep the dropdowns populated. The user can still test generation.
+        setApiStatus("error", "Using local options");
+        return false;
+    }
 }
 
 async function checkHealth() {
@@ -419,18 +480,18 @@ async function init() {
         localStorage.setItem(CONFIG.storageKey, CONFIG.defaultWorkerUrl);
     }
 
+    // Populate the UI immediately from the embedded Story Bible options.
+    renderOptions(FALLBACK_OPTIONS);
+
+    // Health check is informational; it must never prevent the form from loading.
     const ok = await checkHealth();
 
     if (ok) {
-        try {
-            await loadOptions();
-        } catch (error) {
-            console.error(error);
-            showError(`API is reachable, but options could not be loaded: ${error.message}`);
-        }
+        await loadOptions();
     } else {
-        openSettings();
+        setApiStatus("error", "API offline");
     }
 }
+
 
 init();
