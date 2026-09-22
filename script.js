@@ -972,6 +972,17 @@ function mikoReferenceCss() {
             cursor:not-allowed;
         }
 
+        .image-status-v4 {
+            margin-top:10px;
+            min-height:18px;
+            font-size:11px;
+            line-height:1.5;
+        }
+
+        .image-status-loading-v4 { color:#fbbf24; }
+        .image-status-success-v4 { color:#86efac; }
+        .image-status-error-v4 { color:#fca5a5; }
+
         .generated-image-v4 {
             margin-top:12px;
             padding-top:12px;
@@ -1196,16 +1207,23 @@ function installMikoReferenceUIV4() {
     renderMikoReferenceV4();
 }
 
-async function generateMikoImageV4(item, button, imageContainer) {
+async function generateMikoImageV4(item, button, imageContainer, statusElement = null) {
     const reference = getMikoReference();
 
     if (!reference) {
-        throw new Error(
-            "Miko Master Reference is required. Upload the Miko cat reference first."
-        );
+        const message = "Miko Master Reference belum di-upload. Upload gambar Miko (kucing) terlebih dahulu.";
+        if (statusElement) {
+            statusElement.textContent = `❌ ${message}`;
+            statusElement.className = "image-status-v4 image-status-error-v4";
+        }
+        throw new Error(message);
     }
 
     const original = button.textContent;
+    if (statusElement) {
+        statusElement.textContent = "⏳ Mengirim Scene ke Cloudflare Workers AI...";
+        statusElement.className = "image-status-v4 image-status-loading-v4";
+    }
     button.disabled = true;
     button.textContent = "Generating...";
 
@@ -1214,7 +1232,7 @@ async function generateMikoImageV4(item, button, imageContainer) {
     }
 
     try {
-        const result = await fetchJson("/images/generate", {
+        const result = await fetchJson(CONFIG.endpoints.imagesGenerate, {
             method: "POST",
             timeoutMs: 120000,
             body: JSON.stringify({
@@ -1256,7 +1274,7 @@ async function generateMikoImageV4(item, button, imageContainer) {
 
             imageContainer.querySelector("[data-regenerate-image]")?.addEventListener(
                 "click",
-                () => generateMikoImageV4(item, button, imageContainer)
+                () => generateMikoImageV4(item, button, imageContainer, imageContainer?.parentElement?.querySelector(".image-status-v4"))
             );
 
             imageContainer.querySelector("[data-download-image]")?.addEventListener(
@@ -1272,7 +1290,18 @@ async function generateMikoImageV4(item, button, imageContainer) {
             );
         }
 
+        if (statusElement) {
+            statusElement.textContent = "✅ Miko image berhasil dibuat.";
+            statusElement.className = "image-status-v4 image-status-success-v4";
+        }
+
         return result;
+    } catch (error) {
+        if (statusElement) {
+            statusElement.textContent = `❌ ${error?.message || "Image generation failed."}`;
+            statusElement.className = "image-status-v4 image-status-error-v4";
+        }
+        throw error;
     } finally {
         button.disabled = false;
         button.textContent = original;
@@ -1357,6 +1386,7 @@ function renderVisualPromptsV4(result) {
                     <div class="visual-prompt-label">Negative Prompt</div>
                     <div class="visual-prompt-text visual-prompt-negative">${escapeHtml(item.negative_prompt || "—")}</div>
 
+                    <div id="imageStatus-${index}" class="image-status-v4" aria-live="polite"></div>
                     <div id="generatedImage-${index}"></div>
                 </article>
             `).join("")}
@@ -1396,25 +1426,28 @@ function renderVisualPromptsV4(result) {
         });
     });
 
-    panel.querySelectorAll("[data-generate-image]").forEach((button) => {
-        button.addEventListener("click", async () => {
-            const index = Number(button.dataset.generateImage);
-            const item = scenes[index];
-            const imageContainer = document.getElementById(`generatedImage-${index}`);
+    // Event delegation: keeps Generate Image working even after panel re-rendering.
+    panel.addEventListener("click", async (event) => {
+        const button = event.target.closest("[data-generate-image]");
+        if (!button || !panel.contains(button)) return;
 
-            if (!item) return;
+        event.preventDefault();
+        event.stopPropagation();
 
-            try {
-                clearError();
-                await generateMikoImageV4(item, button, imageContainer);
-            } catch (error) {
-                console.error("Miko image generation failed:", error);
-                if (imageContainer) {
-                    imageContainer.innerHTML = "";
-                }
-                showError(error.message || "Miko image generation failed.");
-            }
-        });
+        const index = Number(button.dataset.generateImage);
+        const item = scenes[index];
+        const imageContainer = document.getElementById(`generatedImage-${index}`);
+        const statusElement = document.getElementById(`imageStatus-${index}`);
+
+        if (!item) return;
+
+        try {
+            clearError();
+            await generateMikoImageV4(item, button, imageContainer, statusElement);
+        } catch (error) {
+            console.error("Miko image generation failed:", error);
+            showError(error.message || "Miko image generation failed.");
+        }
     });
 
     panel.querySelector("#copyAllVisualPrompts")?.addEventListener("click", async () => {
