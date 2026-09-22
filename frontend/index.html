@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0b1020">
+    <title>Miko AI Shorts — Story Studio</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-shell">
+        <header class="topbar">
+            <div class="brand">
+                <div class="brand-mark">🐾</div>
+                <div>
+                    <div class="eyebrow">MIKO AI SHORTS</div>
+                    <h1>Story Studio</h1>
+                </div>
+            </div>
+
+            <div class="topbar-actions">
+                <div id="apiStatus" class="status-pill status-unknown">
+                    <span class="status-dot"></span>
+                    <span id="apiStatusText">Checking API...</span>
+                </div>
+                <button id="settingsBtn" class="icon-btn" type="button" title="API settings">⚙</button>
+            </div>
+        </header>
+
+        <main class="page">
+            <section class="hero">
+                <div>
+                    <span class="hero-kicker">Miko Story Engine V3</span>
+                    <h2>Turn a simple idea into a<br><span>ready-to-produce story.</span></h2>
+                    <p>
+                        Choose the story ingredients below. The Cloudflare Story Engine
+                        will build a safe, structured Miko episode in seconds.
+                    </p>
+                </div>
+                <div class="hero-character" aria-hidden="true">
+                    <div class="spark spark-1">✦</div>
+                    <div class="spark spark-2">✦</div>
+                    <div class="miko-placeholder">🐱</div>
+                </div>
+            </section>
+
+            <section class="workspace">
+                <aside class="panel controls-panel">
+                    <div class="panel-header">
+                        <div>
+                            <span class="panel-kicker">STEP 01</span>
+                            <h3>Story Setup</h3>
+                        </div>
+                        <span class="ready-badge">READY</span>
+                    </div>
+
+                    <form id="storyForm">
+                        <div class="field-grid">
+                            <label class="field">
+                                <span>Category</span>
+                                <select id="category" name="category"></select>
+                            </label>
+
+                            <label class="field">
+                                <span>Core Value</span>
+                                <select id="coreValue" name="core_value"></select>
+                            </label>
+                        </div>
+
+                        <label class="field">
+                            <span>Location</span>
+                            <select id="location" name="location"></select>
+                        </label>
+
+                        <div class="field-grid">
+                            <label class="field">
+                                <span>Supporting Character</span>
+                                <select id="supportingCharacter" name="supporting_character"></select>
+                            </label>
+
+                            <label class="field">
+                                <span>Language</span>
+                                <select id="language" name="language">
+                                    <option value="id">Bahasa Indonesia</option>
+                                    <option value="en">English</option>
+                                </select>
+                            </label>
+                        </div>
+
+                        <label class="field">
+                            <span>Main Object <small>(optional)</small></span>
+                            <input id="mainObject" name="main_object" type="text"
+                                placeholder="Example: balloon, ball, story book">
+                        </label>
+
+                        <div class="field-grid duration-row">
+                            <label class="field">
+                                <span>Duration</span>
+                                <select id="duration" name="duration"></select>
+                            </label>
+
+                            <label class="field">
+                                <span>Episode ID <small>(optional)</small></span>
+                                <input id="episodeId" name="episode_id" type="text"
+                                    placeholder="Auto generated">
+                            </label>
+                        </div>
+
+                        <button id="generateBtn" class="generate-btn" type="submit">
+                            <span class="btn-icon">✦</span>
+                            <span>GENERATE STORY</span>
+                        </button>
+                    </form>
+
+                    <div id="errorBox" class="error-box hidden"></div>
+                </aside>
+
+                <section class="panel result-panel">
+                    <div class="panel-header">
+                        <div>
+                            <span class="panel-kicker">STEP 02</span>
+                            <h3>Generated Story</h3>
+                        </div>
+                        <div class="result-actions">
+                            <button id="copyBtn" class="small-btn" type="button" disabled>Copy JSON</button>
+                            <button id="downloadBtn" class="small-btn" type="button" disabled>Download</button>
+                        </div>
+                    </div>
+
+                    <div id="emptyState" class="empty-state">
+                        <div class="empty-icon">✨</div>
+                        <h4>Your story will appear here</h4>
+                        <p>
+                            Configure the story on the left, then click
+                            <strong>Generate Story</strong>.
+                        </p>
+                    </div>
+
+                    <div id="loadingState" class="loading-state hidden">
+                        <div class="loader"></div>
+                        <h4>Creating Miko's story...</h4>
+                        <p>Building title, scenes, dialogue and YouTube metadata.</p>
+                    </div>
+
+                    <div id="storyResult" class="story-result hidden">
+                        <div class="story-heading">
+                            <div>
+                                <span id="storyCategory" class="category-tag">ADVENTURE</span>
+                                <h4 id="storyTitle">Miko's Adventure</h4>
+                            </div>
+                            <div id="storyDuration" class="duration-badge">60 sec</div>
+                        </div>
+
+                        <div class="info-grid">
+                            <div class="info-card">
+                                <span>HOOK</span>
+                                <p id="storyHook"></p>
+                            </div>
+                            <div class="info-card">
+                                <span>LESSON</span>
+                                <p id="storyLesson"></p>
+                            </div>
+                        </div>
+
+                        <div class="section-title">
+                            <span>SCENES</span>
+                            <span id="sceneTotal" class="muted-label"></span>
+                        </div>
+
+                        <div id="sceneList" class="scene-list"></div>
+
+                        <div class="section-title">
+                            <span>VOICE SCRIPT</span>
+                        </div>
+                        <div class="voice-script" id="voiceScript"></div>
+
+                        <div class="section-title">
+                            <span>YOUTUBE METADATA</span>
+                        </div>
+                        <div class="youtube-card">
+                            <div class="metadata-row">
+                                <span>Title</span>
+                                <strong id="youtubeTitle"></strong>
+                            </div>
+                            <div class="metadata-row stacked">
+                                <span>Description</span>
+                                <p id="youtubeDescription"></p>
+                            </div>
+                            <div class="hashtags" id="youtubeHashtags"></div>
+                        </div>
+                    </div>
+                </section>
+            </section>
+
+            <section class="pipeline-panel panel">
+                <div class="panel-header">
+                    <div>
+                        <span class="panel-kicker">PIPELINE</span>
+                        <h3>Production Status</h3>
+                    </div>
+                    <span class="muted-label">V1 STORY STUDIO</span>
+                </div>
+
+                <div class="pipeline">
+                    <div class="pipeline-step active">
+                        <span>01</span>
+                        <b>Story</b>
+                        <small>READY</small>
+                    </div>
+                    <div class="pipeline-line"></div>
+                    <div class="pipeline-step">
+                        <span>02</span>
+                        <b>Scenes</b>
+                        <small>PLANNED</small>
+                    </div>
+                    <div class="pipeline-line"></div>
+                    <div class="pipeline-step">
+                        <span>03</span>
+                        <b>Voice</b>
+                        <small>PLANNED</small>
+                    </div>
+                    <div class="pipeline-line"></div>
+                    <div class="pipeline-step">
+                        <span>04</span>
+                        <b>Video</b>
+                        <small>PLANNED</small>
+                    </div>
+                    <div class="pipeline-line"></div>
+                    <div class="pipeline-step">
+                        <span>05</span>
+                        <b>Publish</b>
+                        <small>PLANNED</small>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <span>MIKO AI SHORTS</span>
+            <span>Story Engine V3 • Cloudflare Python Workers</span>
+        </footer>
+    </div>
+
+    <div id="settingsModal" class="modal hidden">
+        <div class="modal-backdrop" data-close-settings></div>
+        <div class="modal-card">
+            <div class="modal-header">
+                <div>
+                    <span class="panel-kicker">CONFIGURATION</span>
+                    <h3>Worker API</h3>
+                </div>
+                <button class="close-btn" type="button" data-close-settings>×</button>
+            </div>
+
+            <p class="modal-help">
+                Enter your deployed Cloudflare Worker URL. Leave blank when this
+                frontend is served from the same Worker origin.
+            </p>
+
+            <label class="field">
+                <span>Worker URL</span>
+                <input id="workerUrl" type="url"
+                    placeholder="https://ai-shorts-video.<your-subdomain>.workers.dev">
+            </label>
+
+            <div class="modal-actions">
+                <button id="testApiBtn" class="small-btn" type="button">Test Connection</button>
+                <button id="saveSettingsBtn" class="generate-btn compact" type="button">Save Settings</button>
+            </div>
+
+            <div id="settingsStatus" class="settings-status"></div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
