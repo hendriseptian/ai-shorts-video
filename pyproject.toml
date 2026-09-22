@@ -12,3 +12,7 @@ dev = [
     "workers-py",
     "workers-runtime-sdk"
 ]
+[tool.setuptools.package-data]
+engines = [
+    "config/*.json"
+]
