@@ -1,7 +1,7 @@
 [project]
 name = "ai-shorts-video"
-version = "0.1.0"
-description = "AI Shorts Video backend using FastAPI on Cloudflare Python Workers"
+version = "0.2.0"
+description = "Miko AI Shorts backend running on Cloudflare Python Workers"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115,<1.0"
@@ -11,8 +11,4 @@ dependencies = [
 dev = [
     "workers-py",
     "workers-runtime-sdk"
-]
-[tool.setuptools.package-data]
-engines = [
-    "config/*.json"
 ]
