@@ -1,166 +1,163 @@
 """
-Miko Video Generating Engine V1
-Cloudflare Python Workers + fal.ai Queue API
+Miko Video Generating Engine V2
+Cloudflare Workers AI / P-Video
 
-Purpose:
-- Generate a short vertical Miko video from an existing scene image.
-- Uses fal.ai Kling Video 3 Standard Image-to-Video.
-- Keeps the API key server-side.
-- Uses the fal.ai async queue so the Worker does not wait for the whole render.
+This version intentionally removes the R2 and fal.ai dependency.
 
-Important:
-- `start_image_url` must be a publicly reachable image URL.
-- Do not put FAL_KEY in frontend JavaScript.
-- This engine does not upload browser data-URI images to storage yet.
-  The frontend/storage layer should provide a hosted image URL first.
+The generated Miko image is passed directly as a Base64 data URI to
+Cloudflare Workers AI. The P-Video model supports image-to-video and
+accepts an image as a URL or data URI.
+
+Model:
+    pruna/p-video
+
+This keeps the architecture:
+
+Browser
+  -> Cloudflare Worker
+  -> Workers AI
+  -> video URL
+
+No R2 bucket and no fal.ai API key are required by this engine.
+
+IMPORTANT:
+Workers AI has a daily free allocation. Actual model usage consumes
+Neurons. The free allocation is not a guarantee that an unlimited number
+of videos can be generated for free.
 """
 
 from __future__ import annotations
 
-import json
 from typing import Any, Optional
-
-from js import fetch
-from pyodide.ffi import to_js
 
 
 class VideoGenerationError(Exception):
-    """Base error for video generation."""
+    """Base video generation error."""
 
 
-class FalAuthenticationError(VideoGenerationError):
-    """Raised when FAL_KEY is missing or rejected."""
+class VideoGenerationConfigurationError(VideoGenerationError):
+    """Workers AI binding is unavailable."""
 
 
-class FalRequestError(VideoGenerationError):
-    """Raised when fal.ai rejects a request."""
-
-
-class FalQueueError(VideoGenerationError):
-    """Raised when a queue operation fails."""
+class VideoGenerationInputError(VideoGenerationError):
+    """Invalid video input."""
 
 
 class VideoGenerationEngine:
     """
-    Server-side wrapper around fal.ai Kling Video 3 Standard I2V.
+    Cloudflare Workers AI image-to-video engine.
+
+    Expected Worker binding:
+        AI
 
     Model:
-        fal-ai/kling-video/v3/standard/image-to-video
-
-    Flow:
-        submit() -> request_id
-        status() -> queue status
-        result() -> generated video URL
+        pruna/p-video
     """
 
-    MODEL = "fal-ai/kling-video/v3/standard/image-to-video"
-    QUEUE_URL = f"https://queue.fal.run/{MODEL}"
+    MODEL = "pruna/p-video"
 
-    DEFAULT_DURATION = "5"
-    DEFAULT_CFG_SCALE = 0.5
+    DEFAULT_DURATION = 5
+    DEFAULT_RESOLUTION = "720p"
+    DEFAULT_FPS = 24
+    DEFAULT_DRAFT = True
 
     DEFAULT_NEGATIVE_PROMPT = (
-        "blur, distort, low quality, flicker, jitter, "
-        "deformed face, deformed paws, extra limbs, extra legs, "
-        "extra arms, duplicate character, changing fur color, "
-        "changing clothes, human, human child, human body, "
-        "wrong animal species, dog, fox, wolf, bear, rabbit, "
-        "squirrel, scary scene, horror, violence"
+        "flicker, jitter, unstable anatomy, deformed face, deformed paws, "
+        "extra limbs, duplicate character, changing fur color, changing "
+        "clothes, human, human child, human body, wrong animal species, "
+        "dog, fox, wolf, bear, rabbit, squirrel, horror, violence"
     )
 
     MIKO_MOTION_LOCK = (
         "Keep Miko exactly consistent with the starting image. "
-        "Miko is a cute 3D animated orange-and-white male kitten "
-        "with a slightly oversized round feline head, small body, "
-        "short feline legs, fluffy orange tail, cat ears, whiskers, "
-        "dark-brown feline eyes, white muzzle and cheeks, white chest, "
-        "white belly, white paws and white tail tip. "
-        "Miko wears the same bright blue hoodie with white drawstrings "
-        "and the same small paw pendant. "
-        "Do not transform Miko into a human or another animal. "
-        "Preserve the face, fur pattern, colors, clothing, body proportions "
-        "and environment from the starting image."
+        "Miko is a cute 3D animated orange-and-white male kitten with a "
+        "slightly oversized round feline head, small body, short feline "
+        "legs, fluffy orange tail, cat ears, whiskers, dark-brown feline "
+        "eyes, white muzzle and cheeks, white chest, white belly, white "
+        "paws and white tail tip. Miko wears the same bright blue hoodie "
+        "with white drawstrings and the same small paw pendant. "
+        "Do not transform Miko into a human or another animal. Preserve "
+        "the face, fur pattern, colors, clothing, body proportions and "
+        "environment from the starting image."
     )
 
-    def __init__(
-        self,
-        api_key: str,
-        *,
-        model: Optional[str] = None,
-    ):
-        self.api_key = (api_key or "").strip()
-        self.model = model or self.MODEL
-        self.queue_url = f"https://queue.fal.run/{self.model}"
-
-        if not self.api_key:
-            raise FalAuthenticationError(
-                "FAL_KEY is not configured in the Cloudflare Worker."
+    def __init__(self, ai: Any):
+        if ai is None:
+            raise VideoGenerationConfigurationError(
+                "Workers AI binding 'AI' is not available."
             )
+        self.ai = ai
+
+    @classmethod
+    def from_env(cls, env: Any) -> "VideoGenerationEngine":
+        ai = getattr(env, "AI", None)
+        return cls(ai)
 
     @staticmethod
-    def _duration(value: Any) -> str:
-        allowed = {"3", "4", "5", "6", "7", "8", "9",
-                   "10", "11", "12", "13", "14", "15"}
-        value = str(value or "5")
-        if value not in allowed:
-            raise VideoGenerationError(
-                f"Invalid duration '{value}'. "
-                f"Allowed values: {', '.join(sorted(allowed, key=int))}"
-            )
-        return value
-
-    @staticmethod
-    def _require_url(value: str) -> str:
-        value = (value or "").strip()
-        if not value:
-            raise VideoGenerationError("start_image_url is required.")
-
-        if not (
-            value.startswith("https://")
-            or value.startswith("http://")
-        ):
-            raise VideoGenerationError(
-                "start_image_url must be a public HTTP(S) URL. "
-                "A browser data URI is not accepted by this V1 engine."
+    def _validate_image(image: str) -> str:
+        if not isinstance(image, str) or not image.strip():
+            raise VideoGenerationInputError(
+                "image is required."
             )
 
-        return value
+        value = image.strip()
 
-    async def _fetch_json(
-        self,
-        url: str,
-        *,
-        method: str = "GET",
-        payload: Optional[dict[str, Any]] = None,
-    ) -> tuple[int, dict[str, Any], str]:
-        headers = {
-            "Authorization": f"Key {self.api_key}",
-            "Accept": "application/json",
-        }
-
-        options: dict[str, Any] = {
-            "method": method,
-            "headers": headers,
-        }
-
-        if payload is not None:
-            headers["Content-Type"] = "application/json"
-            options["body"] = json.dumps(payload)
-
-        response = await fetch(
-            url,
-            to_js(options, dict_converter="object"),
+        allowed = (
+            value.startswith("data:image/png;base64,")
+            or value.startswith("data:image/jpeg;base64,")
+            or value.startswith("data:image/jpg;base64,")
+            or value.startswith("data:image/webp;base64,")
         )
 
-        status_code = int(response.status)
-        text = await response.text()
+        if not allowed:
+            raise VideoGenerationInputError(
+                "image must be a PNG, JPEG or WebP Base64 data URI."
+            )
 
+        return value
+
+    @staticmethod
+    def _validate_duration(duration: Any) -> int:
         try:
-            data = json.loads(text) if text else {}
-        except Exception:
-            data = {"raw": text}
+            value = int(duration)
+        except (TypeError, ValueError) as exc:
+            raise VideoGenerationInputError(
+                "duration must be an integer."
+            ) from exc
 
-        return status_code, data, text
+        if value < 1 or value > 20:
+            raise VideoGenerationInputError(
+                "duration must be between 1 and 20 seconds."
+            )
+
+        return value
+
+    @staticmethod
+    def _validate_resolution(resolution: str) -> str:
+        value = str(resolution or "720p").strip().lower()
+
+        if value not in {"720p", "1080p"}:
+            raise VideoGenerationInputError(
+                "resolution must be 720p or 1080p."
+            )
+
+        return value
+
+    @staticmethod
+    def _validate_fps(fps: Any) -> int:
+        try:
+            value = int(fps)
+        except (TypeError, ValueError) as exc:
+            raise VideoGenerationInputError(
+                "fps must be an integer."
+            ) from exc
+
+        if value not in {24, 25, 30, 48}:
+            raise VideoGenerationInputError(
+                "fps must be one of 24, 25, 30 or 48."
+            )
+
+        return value
 
     def build_prompt(self, motion_prompt: str) -> str:
         motion = (motion_prompt or "").strip()
@@ -169,251 +166,105 @@ class VideoGenerationEngine:
             motion = (
                 "Miko makes gentle natural movements, blinks naturally, "
                 "looks around curiously, and moves his fluffy tail softly. "
-                "The camera makes a subtle cinematic push-in."
+                "The camera makes a subtle slow push-in."
             )
 
         return (
             f"{self.MIKO_MOTION_LOCK}\n\n"
             f"Scene motion:\n{motion}\n\n"
-            "Animation direction: smooth children's animation, gentle natural "
-            "movement, stable anatomy, stable character identity, coherent "
-            "continuous motion, polished 3D animation, warm family-friendly "
-            "cinematic lighting. Avoid sudden camera movement."
+            "Animation direction: smooth children's animation, gentle "
+            "natural movement, stable anatomy, stable character identity, "
+            "coherent continuous motion, polished 3D animation, warm "
+            "family-friendly cinematic lighting. Avoid sudden motion."
         )
 
-    async def submit(
+    async def generate(
         self,
         *,
-        start_image_url: str,
+        image: str,
         motion_prompt: str,
-        duration: str = DEFAULT_DURATION,
-        negative_prompt: Optional[str] = None,
-        generate_audio: bool = False,
-        cfg_scale: float = DEFAULT_CFG_SCALE,
+        duration: int = DEFAULT_DURATION,
+        resolution: str = DEFAULT_RESOLUTION,
+        fps: int = DEFAULT_FPS,
+        draft: bool = DEFAULT_DRAFT,
+        seed: Optional[int] = None,
         scene_number: Optional[int] = None,
     ) -> dict[str, Any]:
         """
-        Submit an image-to-video job.
+        Generate a video directly through Workers AI.
 
-        Returns the fal queue response, normally containing:
-        request_id, status_url, response_url, cancel_url.
+        `image` is the generated Miko scene image data URI already held
+        by the browser/frontend.
         """
-        image_url = self._require_url(start_image_url)
-        duration = self._duration(duration)
+        image = self._validate_image(image)
+        duration = self._validate_duration(duration)
+        resolution = self._validate_resolution(resolution)
+        fps = self._validate_fps(fps)
 
         prompt = self.build_prompt(motion_prompt)
-        negative = (
-            negative_prompt.strip()
-            if isinstance(negative_prompt, str) and negative_prompt.strip()
-            else self.DEFAULT_NEGATIVE_PROMPT
-        )
 
-        payload = {
+        payload: dict[str, Any] = {
             "prompt": prompt,
-            "start_image_url": image_url,
+            "image": image,
             "duration": duration,
-            "generate_audio": bool(generate_audio),
-            "negative_prompt": negative,
-            "cfg_scale": float(cfg_scale),
+            "resolution": resolution,
+            "fps": fps,
+            "draft": bool(draft),
+            "save_audio": False,
+            "prompt_upsampling": True,
         }
 
-        status_code, data, raw = await self._fetch_json(
-            self.queue_url,
-            method="POST",
-            payload=payload,
-        )
+        if seed is not None:
+            payload["seed"] = int(seed)
 
-        if status_code in (401, 403):
-            raise FalAuthenticationError(
-                f"fal.ai authentication failed ({status_code})."
-            )
+        try:
+            response = await self.ai.run(self.MODEL, payload)
+        except Exception as exc:
+            message = str(exc)
+            if "quota" in message.lower() or "allocation" in message.lower():
+                raise VideoGenerationError(
+                    "Workers AI free allocation/quota was reached. "
+                    "Try again after the daily reset or reduce usage."
+                ) from exc
 
-        if status_code < 200 or status_code >= 300:
-            message = (
-                data.get("detail")
-                or data.get("message")
-                or data.get("error")
-                or raw
-            )
-            raise FalRequestError(
-                f"fal.ai submit failed ({status_code}): {message}"
-            )
+            raise VideoGenerationError(
+                f"Workers AI video generation failed: {message}"
+            ) from exc
 
-        request_id = data.get("request_id")
-        if not request_id:
-            raise FalQueueError(
-                f"fal.ai did not return request_id: {data}"
-            )
+        video_url = None
 
-        return {
-            "success": True,
-            "provider": "fal.ai",
-            "model": self.model,
-            "scene_number": scene_number,
-            "request_id": request_id,
-            "status_url": data.get("status_url"),
-            "response_url": data.get("response_url"),
-            "cancel_url": data.get("cancel_url"),
-            "duration": duration,
-            "generate_audio": bool(generate_audio),
-            "character_lock": "MIKO_STRICT",
-            "status": "IN_QUEUE",
-        }
+        if isinstance(response, dict):
+            video_url = response.get("video")
 
-    async def status(
-        self,
-        request_id: str,
-        *,
-        status_url: Optional[str] = None,
-        logs: bool = False,
-    ) -> dict[str, Any]:
-        """Get the current fal queue status."""
-        request_id = (request_id or "").strip()
-        if not request_id:
-            raise FalQueueError("request_id is required.")
+            if not video_url:
+                result = response.get("result")
+                if isinstance(result, dict):
+                    video_url = result.get("video")
 
-        url = status_url or (
-            f"{self.queue_url}/requests/{request_id}/status"
-        )
-
-        if logs:
-            url += "?logs=1"
-
-        status_code, data, raw = await self._fetch_json(url)
-
-        if status_code == 404:
-            raise FalQueueError(
-                f"fal.ai request not found: {request_id}"
-            )
-
-        if status_code < 200 or status_code >= 300:
-            message = (
-                data.get("detail")
-                or data.get("message")
-                or data.get("error")
-                or raw
-            )
-            raise FalQueueError(
-                f"fal.ai status failed ({status_code}): {message}"
-            )
-
-        return {
-            "success": True,
-            "provider": "fal.ai",
-            "model": self.model,
-            "request_id": request_id,
-            "status": data.get("status"),
-            "queue_position": data.get("queue_position"),
-            "logs": data.get("logs"),
-            "raw": data,
-        }
-
-    async def result(
-        self,
-        request_id: str,
-        *,
-        response_url: Optional[str] = None,
-    ) -> dict[str, Any]:
-        """
-        Fetch the completed result.
-
-        Expected successful result shape:
-        {
-            "video": {
-                "url": "...",
-                "content_type": "video/mp4",
-                ...
-            }
-        }
-        """
-        request_id = (request_id or "").strip()
-        if not request_id:
-            raise FalQueueError("request_id is required.")
-
-        url = response_url or (
-            f"{self.queue_url}/requests/{request_id}"
-        )
-
-        status_code, data, raw = await self._fetch_json(url)
-
-        if status_code < 200 or status_code >= 300:
-            message = (
-                data.get("detail")
-                or data.get("message")
-                or data.get("error")
-                or raw
-            )
-            raise FalQueueError(
-                f"fal.ai result failed ({status_code}): {message}"
-            )
-
-        video = data.get("video")
-        if not isinstance(video, dict):
-            raise FalQueueError(
-                f"fal.ai result has no video object: {data}"
-            )
-
-        video_url = video.get("url")
         if not video_url:
-            raise FalQueueError(
-                f"fal.ai video result has no URL: {video}"
+            raise VideoGenerationError(
+                f"Workers AI returned no video URL. Response: {response}"
             )
 
         return {
             "success": True,
-            "provider": "fal.ai",
-            "model": self.model,
-            "request_id": request_id,
-            "status": "COMPLETED",
-            "video": video,
+            "provider": "cloudflare-workers-ai",
+            "model": self.MODEL,
+            "scene_number": scene_number,
             "video_url": video_url,
-        }
-
-    async def cancel(
-        self,
-        request_id: str,
-        *,
-        cancel_url: Optional[str] = None,
-    ) -> dict[str, Any]:
-        """Cancel a queued/running job when supported by fal."""
-        request_id = (request_id or "").strip()
-        if not request_id:
-            raise FalQueueError("request_id is required.")
-
-        url = cancel_url or (
-            f"{self.queue_url}/requests/{request_id}/cancel"
-        )
-
-        status_code, data, raw = await self._fetch_json(
-            url,
-            method="PUT",
-        )
-
-        if status_code < 200 or status_code >= 300:
-            message = (
-                data.get("detail")
-                or data.get("message")
-                or data.get("error")
-                or raw
-            )
-            raise FalQueueError(
-                f"fal.ai cancel failed ({status_code}): {message}"
-            )
-
-        return {
-            "success": True,
-            "provider": "fal.ai",
-            "model": self.model,
-            "request_id": request_id,
-            "status": "CANCELLED",
-            "raw": data,
+            "duration": duration,
+            "resolution": resolution,
+            "fps": fps,
+            "draft": bool(draft),
+            "audio": False,
+            "character_lock": "MIKO_STRICT",
+            "status": "COMPLETED",
         }
 
 
 __all__ = [
     "VideoGenerationEngine",
     "VideoGenerationError",
-    "FalAuthenticationError",
-    "FalRequestError",
-    "FalQueueError",
+    "VideoGenerationConfigurationError",
+    "VideoGenerationInputError",
 ]
