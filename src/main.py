@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -134,11 +134,14 @@ async def generate_image_prompts(request: ImagePromptRequest):
 
 
 @app.post("/images/generate")
-async def generate_image(request: ImageGenerateRequest):
+async def generate_image(request: ImageGenerateRequest, http_request: Request):
     try:
-        # FastAPI's ASGI entrypoint exposes the binding through the Worker env.
-        # We inject it at request time below.
-        engine = ImageGenerationEngine(_get_ai_binding())
+        # Cloudflare exposes Worker bindings through the ASGI request scope.
+        env = http_request.scope.get("env")
+        if env is None or not hasattr(env, "AI"):
+            raise ImageGenerationEngineError("Workers AI binding is unavailable.")
+
+        engine = ImageGenerationEngine(env.AI)
         data = await engine.generate(
             prompt=request.prompt,
             negative_prompt=request.negative_prompt,
@@ -169,35 +172,5 @@ async def pipeline_status():
         "resolution": "576x1024",
     }
 
-
-def _get_ai_binding():
-    """
-    FastAPI on Python Workers is wrapped by workers.asgi. The Worker
-    environment is available through the ASGI scope. This helper is replaced
-    at runtime by reading the binding from the current request environment.
-    """
-    # This function is intentionally resolved through the ASGI environment.
-    # The ASGI adapter exposes bindings in scope["env"].
-    from contextvars import ContextVar
-    env = _request_env.get()
-    if env is None:
-        raise ImageGenerationEngineError("Workers AI binding is unavailable.")
-    return env.AI
-
-
-_request_env: ContextVar = ContextVar("request_env", default=None)
-
-# Wrap the FastAPI ASGI app so the current Worker env is available to
-# /images/generate. This keeps the existing FastAPI architecture intact.
 from workers import asgi
-
-
-_asgi_app = asgi.entrypoint(app)
-
-
-async def _wrapped(scope, receive, send):
-    _request_env.set(scope.get("env"))
-    return await _asgi_app(scope, receive, send)
-
-
-Default = _wrapped
+Default = asgi.entrypoint(app)
