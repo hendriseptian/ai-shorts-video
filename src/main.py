@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -12,10 +12,16 @@ from engines.image_generation_engine import (
     ImageGenerationEngine,
     ImageGenerationEngineError,
 )
+from engines.video_generation_engine import (
+    VideoGenerationEngine,
+    VideoGenerationError,
+    VideoGenerationInputError,
+    VideoGenerationConfigurationError,
+)
 
 
 APP_NAME = "AI Shorts Video API"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"
 
 app = FastAPI(
     title=APP_NAME,
@@ -64,6 +70,17 @@ class ImageGenerateRequest(BaseModel):
     scene_number: Optional[int] = None
 
 
+class VideoGenerateRequest(BaseModel):
+    image: str
+    motion_prompt: str = ""
+    duration: int = Field(default=5, ge=1, le=20)
+    resolution: str = Field(default="720p")
+    fps: int = Field(default=24)
+    draft: bool = Field(default=True)
+    seed: Optional[int] = None
+    scene_number: Optional[int] = None
+
+
 @app.get("/")
 async def root():
     return {
@@ -72,6 +89,9 @@ async def root():
         "story_engine": "ready",
         "image_prompt_engine": "ready",
         "image_generation_engine": "ready",
+        "video_generation_engine": "ready",
+        "video_provider": "cloudflare-workers-ai",
+        "video_model": "pruna/p-video",
         "image_provider": "cloudflare-workers-ai",
         "image_model": "@cf/black-forest-labs/flux-2-klein-4b",
         "character_identity": "MIKO_CAT",
@@ -86,6 +106,9 @@ async def health():
         "story_engine": "ready",
         "image_prompt_engine": "ready",
         "image_generation_engine": "ready",
+        "video_generation_engine": "ready",
+        "video_provider": "cloudflare-workers-ai",
+        "video_model": "pruna/p-video",
         "image_provider": "cloudflare-workers-ai",
         "image_model": "@cf/black-forest-labs/flux-2-klein-4b",
         "character_identity": "MIKO_CAT",
@@ -134,14 +157,11 @@ async def generate_image_prompts(request: ImagePromptRequest):
 
 
 @app.post("/images/generate")
-async def generate_image(request: ImageGenerateRequest, http_request: Request):
+async def generate_image(request: ImageGenerateRequest):
     try:
-        # Cloudflare exposes Worker bindings through the ASGI request scope.
-        env = http_request.scope.get("env")
-        if env is None or not hasattr(env, "AI"):
-            raise ImageGenerationEngineError("Workers AI binding is unavailable.")
-
-        engine = ImageGenerationEngine(env.AI)
+        # FastAPI's ASGI entrypoint exposes the binding through the Worker env.
+        # We inject it at request time below.
+        engine = ImageGenerationEngine(_get_ai_binding())
         data = await engine.generate(
             prompt=request.prompt,
             negative_prompt=request.negative_prompt,
@@ -158,12 +178,40 @@ async def generate_image(request: ImageGenerateRequest, http_request: Request):
         return {"success": False, "error": f"Image generation error: {exc}"}
 
 
+@app.post("/videos/generate")
+async def generate_video(request: VideoGenerateRequest):
+    try:
+        engine = VideoGenerationEngine(_get_ai_binding())
+        data = await engine.generate(
+            image=request.image,
+            motion_prompt=request.motion_prompt,
+            duration=request.duration,
+            resolution=request.resolution,
+            fps=request.fps,
+            draft=request.draft,
+            seed=request.seed,
+            scene_number=request.scene_number,
+        )
+        return data
+    except (
+        VideoGenerationError,
+        VideoGenerationInputError,
+        VideoGenerationConfigurationError,
+    ) as exc:
+        return {"success": False, "error": str(exc)}
+    except Exception as exc:
+        return {"success": False, "error": f"Video generation error: {exc}"}
+
+
 @app.get("/pipeline/status")
 async def pipeline_status():
     return {
         "story_engine": "ready",
         "image_prompt_engine": "ready",
         "image_generation_engine": "ready",
+        "video_generation_engine": "ready",
+        "video_provider": "cloudflare-workers-ai",
+        "video_model": "pruna/p-video",
         "image_provider": "cloudflare-workers-ai",
         "image_model": "@cf/black-forest-labs/flux-2-klein-4b",
         "character_identity": "MIKO_CAT",
@@ -172,5 +220,35 @@ async def pipeline_status():
         "resolution": "576x1024",
     }
 
+
+def _get_ai_binding():
+    """
+    FastAPI on Python Workers is wrapped by workers.asgi. The Worker
+    environment is available through the ASGI scope. This helper is replaced
+    at runtime by reading the binding from the current request environment.
+    """
+    # This function is intentionally resolved through the ASGI environment.
+    # The ASGI adapter exposes bindings in scope["env"].
+    from contextvars import ContextVar
+    env = _request_env.get()
+    if env is None:
+        raise ImageGenerationEngineError("Workers AI binding is unavailable.")
+    return env.AI
+
+
+_request_env: ContextVar = ContextVar("request_env", default=None)
+
+# Wrap the FastAPI ASGI app so the current Worker env is available to
+# /images/generate. This keeps the existing FastAPI architecture intact.
 from workers import asgi
-Default = asgi.entrypoint(app)
+
+
+_asgi_app = asgi.entrypoint(app)
+
+
+async def _wrapped(scope, receive, send):
+    _request_env.set(scope.get("env"))
+    return await _asgi_app(scope, receive, send)
+
+
+Default = _wrapped
