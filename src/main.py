@@ -1,16 +1,21 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from engines.story_engine import StoryEngine, StoryEngineError
+from engines.image_prompt_engine import (
+    ImagePromptEngine,
+    ImagePromptEngineError,
+)
 
 
 APP_NAME = "AI Shorts Video API"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
+
 
 app = FastAPI(
     title=APP_NAME,
@@ -28,9 +33,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Important: this is now safe at Worker startup because no filesystem
-# or external resource loading is performed by StoryEngine.
+
 story_engine = StoryEngine()
+image_prompt_engine = ImagePromptEngine()
 
 
 class StoryGenerateRequest(BaseModel):
@@ -44,6 +49,12 @@ class StoryGenerateRequest(BaseModel):
     episode_id: Optional[str] = None
 
 
+class ImagePromptRequest(BaseModel):
+    story: dict[str, Any]
+    episode_id: Optional[str] = None
+    language: str = Field(default="id", min_length=2, max_length=5)
+
+
 @app.get("/")
 async def root():
     return {
@@ -52,6 +63,7 @@ async def root():
         "version": APP_VERSION,
         "platform": "cloudflare-python-workers",
         "engine": "story-engine",
+        "image_prompt_engine": image_prompt_engine.version,
         "bible_storage": "embedded-python",
     }
 
@@ -61,6 +73,7 @@ async def health():
     return {
         "status": "healthy",
         "story_engine": "ready",
+        "image_prompt_engine": "ready",
         "platform": "cloudflare-python-workers",
     }
 
@@ -131,10 +144,46 @@ async def generate_story(request: StoryGenerateRequest):
         }
 
 
+@app.post("/story/image-prompts")
+async def generate_image_prompts(request: ImagePromptRequest):
+    try:
+        story = dict(request.story)
+
+        if request.episode_id:
+            episode = dict(story.get("episode") or {})
+            episode["episode_id"] = request.episode_id
+            story["episode"] = episode
+
+        if request.language:
+            episode = dict(story.get("episode") or {})
+            episode.setdefault("language", request.language)
+            story["episode"] = episode
+
+        result = image_prompt_engine.generate_for_story(story)
+
+        return result
+
+    except ImagePromptEngineError as exc:
+        return {
+            "success": False,
+            "engine": "image-prompt-engine",
+            "version": image_prompt_engine.version,
+            "error": str(exc),
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "engine": "image-prompt-engine",
+            "version": image_prompt_engine.version,
+            "error": f"Unexpected image prompt error: {exc}",
+        }
+
+
 @app.get("/pipeline/status")
 async def pipeline_status():
     return {
         "story_engine": "READY",
+        "image_prompt_engine": "READY",
         "scene_engine": "PLANNED",
         "video_engine": "PLANNED",
         "voice_engine": "PLANNED",
