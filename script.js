@@ -1,1068 +1,794 @@
+const CONFIG = {
+    storageKey: "miko_ai_shorts_worker_url",
+    defaultWorkerUrl: "https://ai-shorts-video.hendriseptian25.workers.dev",
+    endpoints: {
+        health: "/health",
+        options: "/story/options",
+        generate: "/story/generate",
+        imagePrompts: "/story/image-prompts",
+        pipeline: "/pipeline/status"
+    }
+};
 
-/* =========================================================
-   MIKO AI SHORTS — STYLE.CSS V4
-   Modern responsive UI for the Miko Story Studio
-   ========================================================= */
+const FALLBACK_OPTIONS = {
+    categories: [
+        "ADVENTURE", "FUNNY", "FRIENDSHIP", "DISCOVERY", "LEARNING",
+        "HELPING_OTHERS", "ANIMAL_FRIENDS", "NATURE", "SIMPLE_PROBLEM_SOLVING",
+        "EVERYDAY_LIFE", "IMAGINATION", "MUSIC_AND_PLAY"
+    ],
+    core_values: [
+        "KINDNESS", "SHARING", "HONESTY", "COURAGE", "PATIENCE", "CURIOSITY",
+        "HELPING_OTHERS", "RESPECT", "CLEANLINESS", "TEAMWORK",
+        "PROBLEM_SOLVING", "LEARNING_FROM_MISTAKES", "RESPONSIBILITY",
+        "EMPATHY", "GRATITUDE", "SELF_CONFIDENCE", "TAKING_CARE_OF_NATURE"
+    ],
+    locations: [
+        { id: "MIKOS_HOUSE", name: "Miko's House" },
+        { id: "RAINBOW_PARK", name: "Rainbow Park" },
+        { id: "SUNNY_FOREST", name: "Sunny Forest" },
+        { id: "SUNNY_BEACH", name: "Sunny Beach" },
+        { id: "LITTLE_SCHOOL", name: "Little School" },
+        { id: "PLAYGROUND", name: "Playground" },
+        { id: "FLOWER_GARDEN", name: "Flower Garden" },
+        { id: "LITTLE_FARM", name: "Little Farm" },
+        { id: "CLOUD_HILL", name: "Cloud Hill" },
+        { id: "MIKOS_NIGHT_GARDEN", name: "Miko's Night Garden" }
+    ],
+    supporting_characters: [
+        { id: "LULU", name: "Lulu — Rabbit" },
+        { id: "BOBI", name: "Bobi — Bear" },
+        { id: "KIKI", name: "Kiki — Bird" },
+        { id: "TOTO", name: "Toto — Turtle" },
+        { id: "NANA", name: "Nana — Squirrel" }
+    ],
+    durations: [30, 45, 60, 90]
+};
 
-:root {
-    --bg: #070b16;
-    --bg-soft: #0d1324;
-    --panel: rgba(17, 24, 39, 0.88);
-    --panel-2: rgba(22, 30, 50, 0.82);
-    --panel-light: rgba(255, 255, 255, 0.055);
-    --border: rgba(255, 255, 255, 0.10);
-    --border-strong: rgba(167, 139, 250, 0.35);
+const $ = (selector) => document.querySelector(selector);
 
-    --text: #f8fafc;
-    --muted: #9aa6ba;
-    --muted-2: #6f7b91;
+const els = {
+    form: $("#storyForm"),
+    category: $("#category"),
+    coreValue: $("#coreValue"),
+    location: $("#location"),
+    supportingCharacter: $("#supportingCharacter"),
+    language: $("#language"),
+    mainObject: $("#mainObject"),
+    duration: $("#duration"),
+    episodeId: $("#episodeId"),
+    generateBtn: $("#generateBtn"),
+    errorBox: $("#errorBox"),
+    emptyState: $("#emptyState"),
+    loadingState: $("#loadingState"),
+    storyResult: $("#storyResult"),
+    storyCategory: $("#storyCategory"),
+    storyTitle: $("#storyTitle"),
+    storyDuration: $("#storyDuration"),
+    storyHook: $("#storyHook"),
+    storyLesson: $("#storyLesson"),
+    sceneList: $("#sceneList"),
+    sceneTotal: $("#sceneTotal"),
+    voiceScript: $("#voiceScript"),
+    youtubeTitle: $("#youtubeTitle"),
+    youtubeDescription: $("#youtubeDescription"),
+    youtubeHashtags: $("#youtubeHashtags"),
+    copyBtn: $("#copyBtn"),
+    downloadBtn: $("#downloadBtn"),
+    apiStatus: $("#apiStatus"),
+    apiStatusText: $("#apiStatusText"),
+    settingsBtn: $("#settingsBtn"),
+    settingsModal: $("#settingsModal"),
+    workerUrl: $("#workerUrl"),
+    saveSettingsBtn: $("#saveSettingsBtn"),
+    testApiBtn: $("#testApiBtn"),
+    settingsStatus: $("#settingsStatus")
+};
 
-    --purple: #8b5cf6;
-    --purple-2: #a78bfa;
-    --blue: #38bdf8;
-    --cyan: #22d3ee;
-    --green: #34d399;
-    --yellow: #fbbf24;
-    --red: #fb7185;
+let lastStory = null;
+let lastVisualPrompts = null;
 
-    --shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
-    --shadow-soft: 0 10px 30px rgba(0, 0, 0, 0.22);
+function normalizeWorkerUrl(value) {
+    let url = String(value ?? "").trim();
 
-    --radius: 22px;
-    --radius-sm: 13px;
+    if (!url) return "";
 
-    --max-width: 1180px;
+    // Allow either:
+    // ai-shorts-video.example.workers.dev
+    // https://ai-shorts-video.example.workers.dev
+    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+        url = "https://" + url;
+    }
+
+    while (url.endsWith("/")) {
+        url = url.slice(0, -1);
+    }
+
+    return url;
 }
 
-* {
-    box-sizing: border-box;
+function getWorkerUrl() {
+    const saved = localStorage.getItem(CONFIG.storageKey);
+    return normalizeWorkerUrl(saved || CONFIG.defaultWorkerUrl);
 }
 
-html {
-    scroll-behavior: smooth;
+function apiUrl(path) {
+    const base = getWorkerUrl();
+    return `${base}${path}`;
 }
 
-body {
-    margin: 0;
-    min-height: 100vh;
-    color: var(--text);
-    background:
-        radial-gradient(circle at 10% 0%, rgba(139, 92, 246, 0.20), transparent 30%),
-        radial-gradient(circle at 90% 10%, rgba(56, 189, 248, 0.13), transparent 28%),
-        radial-gradient(circle at 50% 100%, rgba(167, 139, 250, 0.10), transparent 35%),
-        var(--bg);
-    font-family:
-        Inter,
-        ui-sans-serif,
-        system-ui,
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
-        sans-serif;
-    line-height: 1.5;
+function setApiStatus(state, text) {
+    els.apiStatus.className = `status-pill status-${state}`;
+    els.apiStatusText.textContent = text;
 }
 
-body::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    background-image:
-        linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px);
-    background-size: 44px 44px;
-    mask-image: linear-gradient(to bottom, black, transparent 80%);
-    z-index: -1;
+function showError(message) {
+    els.errorBox.textContent = message;
+    els.errorBox.classList.remove("hidden");
 }
 
-button,
-input,
-select,
-textarea {
-    font: inherit;
+function clearError() {
+    els.errorBox.textContent = "";
+    els.errorBox.classList.add("hidden");
 }
 
-button {
-    border: 0;
-}
+function setLoading(isLoading) {
+    els.generateBtn.disabled = isLoading;
 
-button:disabled {
-    cursor: not-allowed;
-    opacity: .5;
-}
-
-a {
-    color: inherit;
-}
-
-/* =========================================================
-   GLOBAL HELPERS
-   ========================================================= */
-
-.hidden {
-    display: none !important;
-}
-
-.muted {
-    color: var(--muted);
-}
-
-.text-center {
-    text-align: center;
-}
-
-/* =========================================================
-   HEADER / BRAND
-   ========================================================= */
-
-header,
-.app-header,
-.topbar,
-nav {
-    position: relative;
-    z-index: 10;
-}
-
-.brand,
-.logo,
-.branding {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.brand-icon,
-.logo-icon {
-    width: 42px;
-    height: 42px;
-    display: grid;
-    place-items: center;
-    border-radius: 14px;
-    background: linear-gradient(135deg, #a78bfa, #38bdf8);
-    color: white;
-    box-shadow: 0 10px 30px rgba(139, 92, 246, .25);
-}
-
-.brand-title,
-.logo-title {
-    font-weight: 800;
-    letter-spacing: .03em;
-}
-
-.brand-subtitle,
-.logo-subtitle {
-    color: var(--muted);
-    font-size: 12px;
-}
-
-/* =========================================================
-   MAIN LAYOUT
-   ========================================================= */
-
-main,
-.app,
-.page,
-.container {
-    width: min(calc(100% - 32px), var(--max-width));
-    margin-inline: auto;
-}
-
-main,
-.app {
-    padding: 34px 0 80px;
-}
-
-.hero {
-    position: relative;
-    padding: 34px 0 28px;
-}
-
-.hero::after {
-    content: "";
-    position: absolute;
-    width: 240px;
-    height: 240px;
-    right: 0;
-    top: 10px;
-    border-radius: 50%;
-    background: rgba(139, 92, 246, .10);
-    filter: blur(60px);
-    pointer-events: none;
-}
-
-.eyebrow {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    color: var(--purple-2);
-    font-size: 12px;
-    font-weight: 800;
-    letter-spacing: .14em;
-    text-transform: uppercase;
-}
-
-.hero h1 {
-    margin: 10px 0 10px;
-    font-size: clamp(36px, 6vw, 64px);
-    line-height: .98;
-    letter-spacing: -.045em;
-    max-width: 760px;
-}
-
-.hero p {
-    max-width: 680px;
-    margin: 0;
-    color: var(--muted);
-    font-size: 16px;
-}
-
-/* =========================================================
-   STATUS
-   ========================================================= */
-
-.status-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    flex-wrap: wrap;
-    margin: 18px 0;
-}
-
-.status-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 34px;
-    padding: 7px 12px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: rgba(255,255,255,.045);
-    color: var(--muted);
-    font-size: 12px;
-    font-weight: 700;
-}
-
-.status-pill::before {
-    content: "";
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--muted-2);
-    box-shadow: 0 0 0 4px rgba(255,255,255,.035);
-}
-
-.status-ok {
-    color: #bbf7d0;
-    border-color: rgba(52, 211, 153, .25);
-    background: rgba(52, 211, 153, .07);
-}
-
-.status-ok::before {
-    background: var(--green);
-    box-shadow: 0 0 0 4px rgba(52,211,153,.10);
-}
-
-.status-error {
-    color: #fecdd3;
-    border-color: rgba(251, 113, 133, .25);
-    background: rgba(251, 113, 133, .07);
-}
-
-.status-error::before {
-    background: var(--red);
-    box-shadow: 0 0 0 4px rgba(251,113,133,.10);
-}
-
-/* =========================================================
-   BUTTONS
-   ========================================================= */
-
-button,
-.btn {
-    cursor: pointer;
-    transition:
-        transform .18s ease,
-        background .18s ease,
-        border-color .18s ease,
-        box-shadow .18s ease,
-        opacity .18s ease;
-}
-
-button:hover:not(:disabled),
-.btn:hover:not(:disabled) {
-    transform: translateY(-1px);
-}
-
-.btn-primary,
-#generateBtn {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 9px;
-    min-height: 46px;
-    padding: 11px 18px;
-    border: 1px solid rgba(255,255,255,.12);
-    border-radius: 13px;
-    color: white;
-    background: linear-gradient(135deg, #8b5cf6, #6366f1);
-    box-shadow:
-        0 12px 28px rgba(99,102,241,.25),
-        inset 0 1px 0 rgba(255,255,255,.15);
-    font-size: 13px;
-    font-weight: 800;
-    letter-spacing: .03em;
-}
-
-.btn-primary:hover:not(:disabled),
-#generateBtn:hover:not(:disabled) {
-    box-shadow:
-        0 16px 34px rgba(99,102,241,.35),
-        inset 0 1px 0 rgba(255,255,255,.20);
-}
-
-.btn-secondary,
-#copyBtn,
-#downloadBtn,
-#settingsBtn,
-#saveSettingsBtn,
-#testApiBtn {
-    min-height: 40px;
-    padding: 9px 13px;
-    border: 1px solid var(--border);
-    border-radius: 11px;
-    color: var(--text);
-    background: rgba(255,255,255,.055);
-    font-size: 12px;
-    font-weight: 700;
-}
-
-.btn-secondary:hover,
-#copyBtn:hover:not(:disabled),
-#downloadBtn:hover:not(:disabled),
-#settingsBtn:hover,
-#saveSettingsBtn:hover,
-#testApiBtn:hover {
-    border-color: rgba(167,139,250,.35);
-    background: rgba(139,92,246,.12);
-}
-
-#settingsBtn {
-    min-width: 40px;
-    padding: 9px 11px;
-}
-
-/* =========================================================
-   CARDS / PANELS
-   ========================================================= */
-
-.card,
-.panel,
-section.card,
-.story-card,
-.setup-card {
-    position: relative;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background:
-        linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.018)),
-        var(--panel);
-    box-shadow: var(--shadow-soft);
-    backdrop-filter: blur(16px);
-}
-
-.card,
-.panel {
-    padding: 22px;
-}
-
-.card h2,
-.card h3,
-.panel h2,
-.panel h3 {
-    margin-top: 0;
-}
-
-/* =========================================================
-   STORY SETUP
-   ========================================================= */
-
-.story-setup,
-#storyForm {
-    display: grid;
-    gap: 18px;
-}
-
-.form-grid,
-.story-form-grid,
-.setup-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 15px;
-}
-
-.form-group,
-.field,
-.form-field {
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-}
-
-.form-group label,
-.field label,
-.form-field label {
-    color: #cbd5e1;
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: .08em;
-    text-transform: uppercase;
-}
-
-select,
-input[type="text"],
-input[type="url"],
-input[type="number"],
-textarea {
-    width: 100%;
-    min-height: 43px;
-    padding: 10px 12px;
-    border: 1px solid var(--border);
-    border-radius: 11px;
-    outline: none;
-    color: var(--text);
-    background: rgba(3, 7, 18, .62);
-    transition:
-        border-color .18s ease,
-        box-shadow .18s ease,
-        background .18s ease;
-}
-
-select {
-    appearance: auto;
-}
-
-select option {
-    color: #111827;
-    background: white;
-}
-
-input::placeholder,
-textarea::placeholder {
-    color: #667085;
-}
-
-select:focus,
-input:focus,
-textarea:focus {
-    border-color: rgba(167,139,250,.65);
-    box-shadow: 0 0 0 3px rgba(139,92,246,.12);
-    background: rgba(3,7,18,.82);
-}
-
-.form-help,
-.field-help,
-small {
-    color: var(--muted-2);
-    font-size: 11px;
-}
-
-.form-actions {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    margin-top: 4px;
-}
-
-/* =========================================================
-   ERROR / LOADING / EMPTY
-   ========================================================= */
-
-#errorBox {
-    margin: 14px 0;
-    padding: 12px 14px;
-    border: 1px solid rgba(251,113,133,.25);
-    border-radius: 12px;
-    color: #fecdd3;
-    background: rgba(127,29,29,.16);
-    font-size: 12px;
-}
-
-#loadingState,
-#emptyState {
-    border: 1px dashed var(--border);
-    border-radius: 18px;
-    padding: 28px;
-    background: rgba(255,255,255,.025);
-}
-
-#loadingState {
-    text-align: center;
-}
-
-.loading-spinner {
-    width: 34px;
-    height: 34px;
-    margin: 0 auto 12px;
-    border: 3px solid rgba(255,255,255,.10);
-    border-top-color: var(--purple-2);
-    border-radius: 50%;
-    animation: spin .8s linear infinite;
-}
-
-@keyframes spin {
-    to {
-        transform: rotate(360deg);
+    if (isLoading) {
+        els.emptyState.classList.add("hidden");
+        els.storyResult.classList.add("hidden");
+        els.loadingState.classList.remove("hidden");
+        els.generateBtn.querySelector("span:last-child").textContent = "GENERATING...";
+    } else {
+        els.loadingState.classList.add("hidden");
+        els.generateBtn.querySelector("span:last-child").textContent = "GENERATE STORY";
     }
 }
 
-/* =========================================================
-   STORY RESULT
-   ========================================================= */
+async function fetchJson(path, options = {}) {
+    const method = String(options.method || "GET").toUpperCase();
+    const headers = {
+        ...(options.headers || {})
+    };
 
-#storyResult {
-    display: grid;
-    gap: 16px;
-    margin-top: 20px;
-}
-
-.story-header,
-.result-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 18px;
-    flex-wrap: wrap;
-}
-
-.story-category,
-#storyCategory {
-    display: inline-flex;
-    align-items: center;
-    width: fit-content;
-    padding: 5px 9px;
-    border: 1px solid rgba(167,139,250,.22);
-    border-radius: 999px;
-    color: #c4b5fd;
-    background: rgba(139,92,246,.10);
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: .08em;
-}
-
-#storyTitle {
-    margin: 8px 0 4px;
-    font-size: clamp(24px, 4vw, 36px);
-    line-height: 1.1;
-    letter-spacing: -.025em;
-}
-
-#storyDuration,
-#sceneTotal {
-    color: var(--muted);
-    font-size: 11px;
-    font-weight: 700;
-}
-
-.story-actions,
-.result-actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-
-.story-summary-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-}
-
-.story-info,
-.info-card {
-    min-width: 0;
-    padding: 16px;
-    border: 1px solid var(--border);
-    border-radius: 15px;
-    background: rgba(255,255,255,.035);
-}
-
-.story-info-label,
-.info-label {
-    margin-bottom: 6px;
-    color: var(--muted-2);
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: .10em;
-    text-transform: uppercase;
-}
-
-#storyHook,
-#storyLesson {
-    color: #e5e7eb;
-    font-size: 14px;
-}
-
-/* =========================================================
-   SCENES
-   ========================================================= */
-
-#sceneList {
-    display: grid;
-    gap: 10px;
-}
-
-.scene-card {
-    position: relative;
-    display: grid;
-    grid-template-columns: 48px minmax(0, 1fr) auto;
-    gap: 14px;
-    padding: 16px;
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    background:
-        linear-gradient(135deg, rgba(139,92,246,.045), rgba(56,189,248,.025)),
-        rgba(255,255,255,.025);
-    transition:
-        transform .18s ease,
-        border-color .18s ease,
-        background .18s ease;
-}
-
-.scene-card:hover {
-    transform: translateY(-2px);
-    border-color: rgba(167,139,250,.28);
-    background:
-        linear-gradient(135deg, rgba(139,92,246,.08), rgba(56,189,248,.04)),
-        rgba(255,255,255,.035);
-}
-
-.scene-number {
-    display: grid;
-    place-items: center;
-    width: 40px;
-    height: 40px;
-    border-radius: 12px;
-    color: white;
-    background: linear-gradient(135deg, #8b5cf6, #4f46e5);
-    font-size: 12px;
-    font-weight: 900;
-}
-
-.scene-main {
-    min-width: 0;
-}
-
-.scene-main h5 {
-    margin: 0 0 5px;
-    color: #ddd6fe;
-    font-size: 13px;
-}
-
-.scene-main p {
-    margin: 0;
-    color: #cbd5e1;
-    font-size: 13px;
-}
-
-.scene-meta {
-    display: flex;
-    align-items: flex-end;
-    flex-direction: column;
-    gap: 5px;
-    min-width: 70px;
-}
-
-.scene-phase {
-    color: var(--muted);
-    font-size: 10px;
-    text-align: right;
-}
-
-.scene-duration {
-    padding: 4px 7px;
-    border-radius: 999px;
-    color: #bae6fd;
-    background: rgba(56,189,248,.08);
-    font-size: 10px;
-    font-weight: 700;
-}
-
-.scene-dialogue {
-    grid-column: 2 / -1;
-    padding: 11px 13px;
-    border-left: 2px solid rgba(167,139,250,.45);
-    border-radius: 0 10px 10px 0;
-    color: #e2e8f0;
-    background: rgba(139,92,246,.045);
-    font-size: 12px;
-    font-style: italic;
-}
-
-/* =========================================================
-   VOICE / YOUTUBE
-   ========================================================= */
-
-.voice-script,
-.youtube-section,
-.metadata-card {
-    display: grid;
-    gap: 10px;
-}
-
-#voiceScript,
-#youtubeTitle,
-#youtubeDescription {
-    white-space: pre-wrap;
-    padding: 15px;
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    color: #dbeafe;
-    background: rgba(2,6,23,.45);
-    font-size: 12px;
-    line-height: 1.65;
-}
-
-#youtubeDescription {
-    min-height: 100px;
-}
-
-#youtubeHashtags {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 7px;
-}
-
-.hashtag {
-    display: inline-flex;
-    align-items: center;
-    padding: 5px 9px;
-    border: 1px solid rgba(56,189,248,.18);
-    border-radius: 999px;
-    color: #bae6fd;
-    background: rgba(56,189,248,.06);
-    font-size: 10px;
-    font-weight: 700;
-}
-
-/* =========================================================
-   VISUAL PROMPTS
-   JS also adds dynamic styles. These rules provide the
-   overall panel appearance and work alongside them.
-   ========================================================= */
-
-.visual-prompts-panel {
-    margin-top: 18px;
-    border: 1px solid rgba(139,92,246,.28);
-    border-radius: 20px;
-    padding: 20px;
-    background:
-        radial-gradient(circle at top right, rgba(139,92,246,.10), transparent 30%),
-        rgba(15,23,42,.78);
-    box-shadow: var(--shadow-soft);
-}
-
-.visual-prompts-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 14px;
-    flex-wrap: wrap;
-}
-
-.visual-prompts-header h3 {
-    margin: 0;
-    font-size: 17px;
-}
-
-.visual-prompts-header p {
-    margin: 4px 0 0;
-    color: var(--muted);
-    font-size: 11px;
-}
-
-.visual-prompts-actions {
-    display: flex;
-    gap: 7px;
-    flex-wrap: wrap;
-}
-
-.visual-prompts-actions button,
-.visual-prompt-copy {
-    min-height: 34px;
-    padding: 7px 10px;
-    border: 1px solid var(--border);
-    border-radius: 9px;
-    color: #e5e7eb;
-    background: rgba(255,255,255,.045);
-    font-size: 10px;
-    font-weight: 700;
-}
-
-.visual-prompts-actions button:hover,
-.visual-prompt-copy:hover {
-    border-color: rgba(167,139,250,.32);
-    background: rgba(139,92,246,.15);
-}
-
-.visual-prompt-card {
-    border: 1px solid rgba(255,255,255,.08);
-    border-radius: 15px;
-    padding: 15px;
-    margin-top: 10px;
-    background: rgba(2,6,23,.46);
-}
-
-.visual-prompt-card-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
-}
-
-.visual-prompt-number {
-    color: #ddd6fe;
-    font-size: 11px;
-    font-weight: 900;
-    letter-spacing: .08em;
-}
-
-.visual-prompt-meta {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-    margin-top: 7px;
-    color: var(--muted-2);
-    font-size: 10px;
-}
-
-.visual-prompt-label {
-    margin: 12px 0 5px;
-    color: var(--muted-2);
-    font-size: 9px;
-    font-weight: 900;
-    letter-spacing: .10em;
-    text-transform: uppercase;
-}
-
-.visual-prompt-text {
-    color: #e5e7eb;
-    white-space: pre-wrap;
-    line-height: 1.55;
-    font-size: 12px;
-}
-
-.visual-prompt-negative {
-    color: #94a3b8;
-}
-
-.visual-prompt-status {
-    margin-top: 12px;
-    color: var(--muted-2);
-    font-size: 10px;
-}
-
-/* =========================================================
-   SETTINGS MODAL
-   ========================================================= */
-
-#settingsModal {
-    position: fixed;
-    inset: 0;
-    z-index: 1000;
-    display: grid;
-    place-items: center;
-    padding: 20px;
-    background: rgba(2,6,23,.72);
-    backdrop-filter: blur(8px);
-}
-
-#settingsModal.hidden {
-    display: none !important;
-}
-
-.settings-modal,
-.modal,
-.modal-content {
-    width: min(100%, 520px);
-    padding: 22px;
-    border: 1px solid var(--border-strong);
-    border-radius: 22px;
-    color: var(--text);
-    background: #101729;
-    box-shadow: var(--shadow);
-}
-
-.settings-modal h2,
-.modal h2,
-.modal-content h2 {
-    margin-top: 0;
-}
-
-.settings-actions,
-.modal-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-top: 16px;
-}
-
-#settingsStatus {
-    min-height: 18px;
-    margin-top: 10px;
-    color: var(--muted);
-    font-size: 11px;
-}
-
-/* =========================================================
-   FOOTER
-   ========================================================= */
-
-footer {
-    width: min(calc(100% - 32px), var(--max-width));
-    margin: 0 auto;
-    padding: 20px 0 35px;
-    color: var(--muted-2);
-    font-size: 11px;
-    text-align: center;
-}
-
-/* =========================================================
-   RESPONSIVE
-   ========================================================= */
-
-@media (max-width: 800px) {
-    main,
-    .app,
-    .page,
-    .container {
-        width: min(calc(100% - 22px), var(--max-width));
+    // Do NOT send Content-Type: application/json on GET requests.
+    // From a local file (origin: null), that header can trigger a CORS
+    // preflight before the Worker receives the request.
+    if (method !== "GET" && options.body !== undefined) {
+        headers["Content-Type"] = "application/json";
     }
 
-    main,
-    .app {
-        padding-top: 20px;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+    let response;
+    try {
+        response = await fetch(apiUrl(path), {
+            ...options,
+            method,
+            headers,
+            signal: controller.signal
+        });
+    } catch (error) {
+        if (error.name === "AbortError") {
+            throw new Error("API request timed out after 10 seconds.");
+        }
+        throw new Error(`Cannot reach Worker API: ${error.message}`);
+    } finally {
+        clearTimeout(timeoutId);
     }
 
-    .hero {
-        padding-top: 22px;
+    let payload = null;
+    try {
+        payload = await response.json();
+    } catch {
+        throw new Error(`API returned HTTP ${response.status} without valid JSON.`);
     }
 
-    .hero h1 {
-        font-size: 40px;
+    if (!response.ok) {
+        throw new Error(payload?.detail || payload?.error || `API error: HTTP ${response.status}`);
     }
 
-    .form-grid,
-    .story-form-grid,
-    .setup-grid,
-    .story-summary-grid {
-        grid-template-columns: 1fr;
+    return payload;
+}
+
+async function generateVisualPrompts(story) {
+    const episode = story?.episode || {};
+
+    return await fetchJson(CONFIG.endpoints.imagePrompts, {
+        method: "POST",
+        body: JSON.stringify({
+            story,
+            episode_id: episode.episode_id || null,
+            language: episode.language || "id"
+        })
+    });
+}
+
+function ensureVisualPromptStyles() {
+    if (document.getElementById("visualPromptDynamicStyles")) return;
+
+    const style = document.createElement("style");
+    style.id = "visualPromptDynamicStyles";
+    style.textContent = `
+        .visual-prompts-panel {
+            margin-top: 18px;
+            border: 1px solid rgba(139, 92, 246, .28);
+            border-radius: 18px;
+            padding: 18px;
+            background: rgba(15, 23, 42, .72);
+        }
+
+        .visual-prompts-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .visual-prompts-header h3 {
+            margin: 0;
+            font-size: 16px;
+        }
+
+        .visual-prompts-header p {
+            margin: 4px 0 0;
+            opacity: .65;
+            font-size: 12px;
+        }
+
+        .visual-prompts-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .visual-prompts-actions button,
+        .visual-prompt-copy {
+            border: 1px solid rgba(255,255,255,.1);
+            background: rgba(255,255,255,.05);
+            color: inherit;
+            border-radius: 9px;
+            padding: 7px 10px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+
+        .visual-prompts-actions button:hover,
+        .visual-prompt-copy:hover {
+            background: rgba(139,92,246,.18);
+        }
+
+        .visual-prompt-card {
+            border: 1px solid rgba(255,255,255,.07);
+            border-radius: 14px;
+            padding: 14px;
+            margin-top: 10px;
+            background: rgba(2, 6, 23, .42);
+        }
+
+        .visual-prompt-card-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .visual-prompt-number {
+            font-weight: 700;
+            font-size: 12px;
+        }
+
+        .visual-prompt-meta {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            opacity: .7;
+            font-size: 10px;
+        }
+
+        .visual-prompt-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: .08em;
+            opacity: .55;
+            margin: 10px 0 5px;
+        }
+
+        .visual-prompt-text {
+            white-space: pre-wrap;
+            line-height: 1.55;
+            font-size: 12px;
+            color: rgba(255,255,255,.86);
+        }
+
+        .visual-prompt-negative {
+            color: rgba(255,255,255,.58);
+        }
+
+        .visual-prompt-status {
+            font-size: 11px;
+            opacity: .7;
+            margin-top: 10px;
+        }
+    `;
+    document.head.appendChild(style);
+}
+
+function renderVisualPrompts(result) {
+    lastVisualPrompts = result;
+
+    const scenes = Array.isArray(result?.prompts) ? result.prompts : [];
+    if (!scenes.length) return;
+
+    ensureVisualPromptStyles();
+
+    let panel = document.getElementById("visualPromptsPanel");
+
+    if (!panel) {
+        panel = document.createElement("section");
+        panel.id = "visualPromptsPanel";
+        panel.className = "visual-prompts-panel";
+
+        const anchor = els.sceneList?.closest("section, .card, .panel") || els.sceneList;
+        if (anchor?.parentNode) {
+            anchor.parentNode.insertBefore(panel, anchor.nextSibling);
+        } else if (els.storyResult) {
+            els.storyResult.appendChild(panel);
+        }
     }
 
-    .scene-card {
-        grid-template-columns: 42px minmax(0, 1fr);
+    panel.innerHTML = `
+        <div class="visual-prompts-header">
+            <div>
+                <h3>🎨 Visual Prompts</h3>
+                <p>${scenes.length} scene image prompts · 9:16 · 1080×1920</p>
+            </div>
+            <div class="visual-prompts-actions">
+                <button type="button" id="copyAllVisualPrompts">Copy All</button>
+                <button type="button" id="downloadVisualPrompts">Download</button>
+            </div>
+        </div>
+
+        <div id="visualPromptList">
+            ${scenes.map((item, index) => `
+                <article class="visual-prompt-card">
+                    <div class="visual-prompt-card-head">
+                        <div class="visual-prompt-number">
+                            SCENE ${String(item.scene_number ?? index + 1).padStart(2, "0")}
+                        </div>
+                        <div class="visual-prompts-actions">
+                            <button
+                                type="button"
+                                class="visual-prompt-copy"
+                                data-copy-visual="${index}"
+                            >Copy Prompt</button>
+                        </div>
+                    </div>
+
+                    <div class="visual-prompt-meta">
+                        <span>${escapeHtml(item.aspect_ratio || "9:16")}</span>
+                        <span>•</span>
+                        <span>${escapeHtml(item.resolution || "1080x1920")}</span>
+                        <span>•</span>
+                        <span>${escapeHtml(item.world_lock || "Miko World")}</span>
+                    </div>
+
+                    <div class="visual-prompt-label">Image Prompt</div>
+                    <div class="visual-prompt-text">${escapeHtml(item.prompt || "—")}</div>
+
+                    <div class="visual-prompt-label">Negative Prompt</div>
+                    <div class="visual-prompt-text visual-prompt-negative">${escapeHtml(item.negative_prompt || "—")}</div>
+                </article>
+            `).join("")}
+        </div>
+
+        <div class="visual-prompt-status">
+            Image generation is not connected yet. These prompts are ready for the next provider stage.
+        </div>
+    `;
+
+    panel.querySelectorAll("[data-copy-visual]").forEach((button) => {
+        button.addEventListener("click", async () => {
+            const index = Number(button.dataset.copyVisual);
+            const item = scenes[index];
+            if (!item) return;
+
+            const content = [
+                `SCENE ${String(item.scene_number ?? index + 1).padStart(2, "0")}`,
+                "",
+                "IMAGE PROMPT:",
+                item.prompt || "",
+                "",
+                "NEGATIVE PROMPT:",
+                item.negative_prompt || ""
+            ].join("\\n");
+
+            try {
+                await navigator.clipboard.writeText(content);
+                const original = button.textContent;
+                button.textContent = "Copied!";
+                setTimeout(() => { button.textContent = original; }, 1000);
+            } catch (error) {
+                console.error(error);
+                showError("Clipboard access is unavailable in this browser.");
+            }
+        });
+    });
+
+    panel.querySelector("#copyAllVisualPrompts")?.addEventListener("click", async () => {
+        const content = scenes.map((item, index) => [
+            `SCENE ${String(item.scene_number ?? index + 1).padStart(2, "0")}`,
+            "",
+            "IMAGE PROMPT:",
+            item.prompt || "",
+            "",
+            "NEGATIVE PROMPT:",
+            item.negative_prompt || "",
+            "",
+            "----------------------------------------",
+            ""
+        ].join("\\n")).join("\\n");
+
+        try {
+            await navigator.clipboard.writeText(content);
+            const button = panel.querySelector("#copyAllVisualPrompts");
+            const original = button.textContent;
+            button.textContent = "Copied!";
+            setTimeout(() => { button.textContent = original; }, 1000);
+        } catch (error) {
+            console.error(error);
+            showError("Clipboard access is unavailable in this browser.");
+        }
+    });
+
+    panel.querySelector("#downloadVisualPrompts")?.addEventListener("click", () => {
+        const blob = new Blob(
+            [JSON.stringify(result, null, 2)],
+            { type: "application/json" }
+        );
+
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = "miko-visual-prompts.json";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+    });
+}
+
+function optionId(item) {
+    if (typeof item === "string") return item;
+    return item?.id ?? item?.value ?? item?.name ?? "";
+}
+
+function optionLabel(item) {
+    if (typeof item === "string") {
+        return item.replaceAll("_", " ");
+    }
+    return item?.name ?? item?.id ?? item?.value ?? "";
+}
+
+function populateSelect(select, items, placeholder = null) {
+    select.innerHTML = "";
+
+    if (placeholder !== null) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = placeholder;
+        select.appendChild(option);
     }
 
-    .scene-meta {
-        grid-column: 2;
-        flex-direction: row;
-        align-items: center;
-    }
+    (items || []).forEach((item) => {
+        const option = document.createElement("option");
+        option.value = optionId(item);
+        option.textContent = optionLabel(item);
+        select.appendChild(option);
+    });
+}
 
-    .scene-phase {
-        text-align: left;
-    }
+function renderOptions(data) {
+    const source = data && typeof data === "object" ? data : FALLBACK_OPTIONS;
 
-    .scene-dialogue {
-        grid-column: 1 / -1;
+    populateSelect(els.category, source.categories || FALLBACK_OPTIONS.categories);
+    populateSelect(els.coreValue, source.core_values || FALLBACK_OPTIONS.core_values);
+    populateSelect(els.location, source.locations || FALLBACK_OPTIONS.locations);
+    populateSelect(
+        els.supportingCharacter,
+        source.supporting_characters || FALLBACK_OPTIONS.supporting_characters,
+        "Miko only"
+    );
+
+    const durations = source.durations?.length
+        ? source.durations
+        : FALLBACK_OPTIONS.durations;
+
+    populateSelect(
+        els.duration,
+        durations.map((value) => ({ id: value, name: `${value} seconds` }))
+    );
+
+    if (els.category.options.length) els.category.selectedIndex = 0;
+    if (els.coreValue.options.length) els.coreValue.selectedIndex = 0;
+    if (els.location.options.length) els.location.selectedIndex = 0;
+    if (els.duration.options.length) {
+        const sixty = [...els.duration.options].findIndex(o => o.value === "60");
+        els.duration.selectedIndex = sixty >= 0 ? sixty : 0;
     }
 }
 
-@media (max-width: 560px) {
-    main,
-    .app,
-    .page,
-    .container {
-        width: min(calc(100% - 16px), var(--max-width));
-    }
+async function loadOptions() {
+    // Render immediately. This makes the form usable even when index.html
+    // is opened directly from file:// and the browser blocks cross-origin fetch.
+    renderOptions(FALLBACK_OPTIONS);
 
-    .card,
-    .panel,
-    .visual-prompts-panel {
-        padding: 15px;
-        border-radius: 17px;
-    }
-
-    .hero h1 {
-        font-size: 34px;
-    }
-
-    .hero p {
-        font-size: 14px;
-    }
-
-    .story-header,
-    .result-header {
-        display: block;
-    }
-
-    .story-actions,
-    .result-actions {
-        margin-top: 12px;
-    }
-
-    #generateBtn {
-        width: 100%;
-    }
-
-    .scene-card {
-        padding: 13px;
-        gap: 10px;
-    }
-
-    .scene-number {
-        width: 36px;
-        height: 36px;
-    }
-
-    .visual-prompts-header {
-        display: block;
-    }
-
-    .visual-prompts-header .visual-prompts-actions {
-        margin-top: 10px;
-    }
-
-    #settingsModal {
-        padding: 10px;
-    }
-
-    .settings-modal,
-    .modal,
-    .modal-content {
-        padding: 17px;
-        border-radius: 18px;
+    try {
+        const data = await fetchJson(CONFIG.endpoints.options);
+        renderOptions(data);
+        setApiStatus("ok", "API connected");
+        return true;
+    } catch (error) {
+        console.warn("Could not load /story/options; using built-in options.", error);
+        // Keep the dropdowns populated. The user can still test generation.
+        setApiStatus("error", "Using local options");
+        return false;
     }
 }
 
-/* =========================================================
-   ACCESSIBILITY / REDUCED MOTION
-   ========================================================= */
-
-:focus-visible {
-    outline: 2px solid var(--purple-2);
-    outline-offset: 2px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-    *,
-    *::before,
-    *::after {
-        scroll-behavior: auto !important;
-        animation-duration: .001ms !important;
-        animation-iteration-count: 1 !important;
-        transition-duration: .001ms !important;
+async function checkHealth() {
+    try {
+        await fetchJson(CONFIG.endpoints.health);
+        setApiStatus("ok", "API online");
+        return true;
+    } catch (error) {
+        setApiStatus("error", "API offline");
+        console.warn(error);
+        return false;
     }
 }
+
+function collectForm() {
+    return {
+        category: els.category.value || null,
+        core_value: els.coreValue.value || null,
+        location: els.location.value || null,
+        supporting_character: els.supportingCharacter.value || null,
+        main_object: els.mainObject.value.trim() || null,
+        duration: Number(els.duration.value || 60),
+        language: els.language.value || "id",
+        episode_id: els.episodeId.value.trim() || null
+    };
+}
+
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
+
+function renderStory(story) {
+    lastStory = story;
+
+    const episode = story.episode || {};
+    const scenes = Array.isArray(story.scenes) ? story.scenes : [];
+    const youtube = story.youtube || {};
+
+    els.emptyState.classList.add("hidden");
+    els.loadingState.classList.add("hidden");
+    els.storyResult.classList.remove("hidden");
+
+    els.storyCategory.textContent = String(episode.category || "STORY").replaceAll("_", " ");
+    els.storyTitle.textContent = story.title || "Untitled Story";
+    els.storyDuration.textContent = `${episode.duration_target || 0} sec`;
+    els.storyHook.textContent = story.hook || "—";
+    els.storyLesson.textContent = story.lesson || "—";
+    els.sceneTotal.textContent = `${scenes.length} scenes`;
+
+    els.sceneList.innerHTML = scenes.map((scene, index) => `
+        <article class="scene-card">
+            <div class="scene-number">${String(scene.scene_number ?? index + 1).padStart(2, "0")}</div>
+            <div class="scene-main">
+                <h5>${escapeHtml(scene.phase || `Scene ${index + 1}`)}</h5>
+                <p>${escapeHtml(scene.story || scene.action || "")}</p>
+            </div>
+            <div class="scene-meta">
+                <div class="scene-phase">${escapeHtml(scene.emotion || "—")}</div>
+                <span class="scene-duration">${escapeHtml(scene.duration || 0)} sec</span>
+            </div>
+            <div class="scene-dialogue">${escapeHtml(scene.dialogue || "No dialogue")}</div>
+        </article>
+    `).join("");
+
+    els.voiceScript.textContent = story.voice_script || "—";
+    els.youtubeTitle.textContent = youtube.title || story.title || "—";
+    els.youtubeDescription.textContent = youtube.description || "—";
+
+    els.youtubeHashtags.innerHTML = (youtube.hashtags || [])
+        .map(tag => `<span class="hashtag">${escapeHtml(tag)}</span>`)
+        .join("");
+
+    els.copyBtn.disabled = false;
+    els.downloadBtn.disabled = false;
+}
+
+async function generateStory(event) {
+    event.preventDefault();
+    clearError();
+
+    const payload = collectForm();
+    setLoading(true);
+
+    try {
+        const result = await fetchJson(CONFIG.endpoints.generate, {
+            method: "POST",
+            body: JSON.stringify(payload)
+        });
+
+        if (!result.success) {
+            throw new Error(result.error || "Story Engine returned an unknown error.");
+        }
+
+        renderStory(result.data);
+
+        // Generate visual prompts from the same story.
+        // Story generation remains successful even if the prompt stage fails.
+        try {
+            const visualResult = await generateVisualPrompts(result.data);
+
+            if (!visualResult?.success) {
+                throw new Error(
+                    visualResult?.error || "Image prompt engine returned an unknown error."
+                );
+            }
+
+            renderVisualPrompts(visualResult);
+            setApiStatus("ok", "Story + visual prompts ready");
+        } catch (promptError) {
+            console.error("Visual prompt generation failed:", promptError);
+            showError(
+                `Story generated, but visual prompts failed: ${promptError.message}`
+            );
+            setApiStatus("error", "Story ready / prompts failed");
+        }
+    } catch (error) {
+        console.error(error);
+        els.loadingState.classList.add("hidden");
+        els.emptyState.classList.remove("hidden");
+        showError(error.message || "Failed to generate story.");
+        setApiStatus("error", "Generation failed");
+    } finally {
+        setLoading(false);
+    }
+}
+
+async function copyJson() {
+    if (!lastStory) return;
+
+    try {
+        await navigator.clipboard.writeText(JSON.stringify(lastStory, null, 2));
+        const original = els.copyBtn.textContent;
+        els.copyBtn.textContent = "Copied!";
+        setTimeout(() => { els.copyBtn.textContent = original; }, 1200);
+    } catch (error) {
+        console.error(error);
+        showError("Clipboard access is unavailable in this browser.");
+    }
+}
+
+function downloadStory() {
+    if (!lastStory) return;
+
+    const safeTitle = String(lastStory.title || "miko-story")
+        .replace(/[^a-z0-9]+/gi, "-")
+        .replace(/^-|-$/g, "")
+        .toLowerCase();
+
+    const blob = new Blob(
+        [JSON.stringify(lastStory, null, 2)],
+        { type: "application/json" }
+    );
+
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${safeTitle || "miko-story"}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+}
+
+function openSettings() {
+    els.workerUrl.value = getWorkerUrl();
+    els.settingsStatus.textContent = "";
+    els.settingsModal.classList.remove("hidden");
+}
+
+function closeSettings() {
+    els.settingsModal.classList.add("hidden");
+}
+
+async function saveSettings() {
+    const value = normalizeWorkerUrl(els.workerUrl.value) || CONFIG.defaultWorkerUrl;
+
+    if (value) {
+        try {
+            const parsed = new URL(value);
+
+            if (!["http:", "https:"].includes(parsed.protocol)) {
+                throw new Error("Unsupported protocol");
+            }
+        } catch {
+            els.settingsStatus.textContent = "Please enter a valid Worker URL.";
+            return;
+        }
+    }
+
+    localStorage.setItem(CONFIG.storageKey, value);
+    els.workerUrl.value = value;
+    els.settingsStatus.textContent = "Saved. Testing connection...";
+
+    const ok = await checkHealth();
+
+    if (ok) {
+        els.settingsStatus.textContent = "Connection successful.";
+        await loadOptions();
+    } else {
+        els.settingsStatus.textContent = "Saved, but the Worker could not be reached.";
+    }
+}
+
+async function testApi() {
+    els.settingsStatus.textContent = "Testing...";
+    const ok = await checkHealth();
+    els.settingsStatus.textContent = ok
+        ? "Worker connection successful."
+        : "Worker connection failed. Check URL and CORS.";
+}
+
+function bindEvents() {
+    els.form.addEventListener("submit", generateStory);
+    els.copyBtn.addEventListener("click", copyJson);
+    els.downloadBtn.addEventListener("click", downloadStory);
+    els.settingsBtn.addEventListener("click", openSettings);
+    els.saveSettingsBtn.addEventListener("click", saveSettings);
+    els.testApiBtn.addEventListener("click", testApi);
+
+    document.querySelectorAll("[data-close-settings]").forEach((element) => {
+        element.addEventListener("click", closeSettings);
+    });
+
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeSettings();
+    });
+}
+
+async function init() {
+    bindEvents();
+
+    if (!localStorage.getItem(CONFIG.storageKey) && CONFIG.defaultWorkerUrl) {
+        localStorage.setItem(CONFIG.storageKey, CONFIG.defaultWorkerUrl);
+    }
+
+    // Populate the UI immediately from the embedded Story Bible options.
+    renderOptions(FALLBACK_OPTIONS);
+
+    // Health check is informational; it must never prevent the form from loading.
+    const ok = await checkHealth();
+
+    if (ok) {
+        await loadOptions();
+    } else {
+        setApiStatus("error", "API offline");
+    }
+}
+
+
+init();
