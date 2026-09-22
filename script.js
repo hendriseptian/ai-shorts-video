@@ -1,6 +1,6 @@
 const CONFIG = {
     storageKey: "miko_ai_shorts_worker_url",
-    defaultWorkerUrl: "",
+    defaultWorkerUrl: "https://ai-shorts-video.hendriseptian25.workers.dev",
     endpoints: {
         health: "/health",
         options: "/story/options",
@@ -106,7 +106,7 @@ function normalizeWorkerUrl(value) {
 
 function getWorkerUrl() {
     const saved = localStorage.getItem(CONFIG.storageKey);
-    return normalizeWorkerUrl(saved ?? CONFIG.defaultWorkerUrl);
+    return normalizeWorkerUrl(saved || CONFIG.defaultWorkerUrl);
 }
 
 function apiUrl(path) {
@@ -425,7 +425,7 @@ function closeSettings() {
 }
 
 async function saveSettings() {
-    const value = normalizeWorkerUrl(els.workerUrl.value);
+    const value = normalizeWorkerUrl(els.workerUrl.value) || CONFIG.defaultWorkerUrl;
 
     if (value) {
         try {
