@@ -6,7 +6,7 @@ const CONFIG = {
         options: "/story/options",
         generate: "/story/generate",
         imagePrompts: "/story/image-prompts",
-        imageGenerate: "/images/generate",
+        imagesGenerate: "/images/generate",
         pipeline: "/pipeline/status"
     }
 };
@@ -160,7 +160,8 @@ async function fetchJson(path, options = {}) {
     }
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const timeoutMs = Number(options.timeoutMs || 10000);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     let response;
     try {
@@ -318,128 +319,6 @@ function ensureVisualPromptStyles() {
     document.head.appendChild(style);
 }
 
-
-async function generateSceneImage(item, button) {
-    if (!item?.prompt) {
-        showError("This scene has no image prompt.");
-        return null;
-    }
-
-    const originalText = button?.textContent || "Generate Image";
-
-    if (button) {
-        button.disabled = true;
-        button.textContent = "Generating...";
-    }
-
-    try {
-        const result = await fetchJson(CONFIG.endpoints.imageGenerate, {
-            method: "POST",
-            body: JSON.stringify({
-                prompt: item.prompt,
-                negative_prompt: item.negative_prompt || "",
-                scene_number: Number(item.scene_number || 1),
-                episode_id: lastStory?.episode?.episode_id || null,
-                steps: 4,
-                aspect_ratio: item.aspect_ratio || "9:16",
-                resolution: "576x1024"
-            })
-        });
-
-        if (!result?.success || !result?.data_uri) {
-            throw new Error(result?.error || "Image generation returned no image.");
-        }
-
-        item.generated_image = result.data_uri;
-        item.generated_at = new Date().toISOString();
-        item.aspect_ratio = result.aspect_ratio || "9:16";
-        item.resolution = result.resolution || "576x1024";
-
-        const card = button?.closest(".visual-prompt-card");
-        if (card) {
-            let preview = card.querySelector(".generated-image-preview");
-
-            if (!preview) {
-                preview = document.createElement("div");
-                preview.className = "generated-image-preview";
-                card.appendChild(preview);
-            }
-
-            preview.innerHTML = `
-                <div class="visual-prompt-label">Generated Image</div>
-                <div class="generated-image-frame">
-                    <img src="${result.data_uri}" alt="Generated Miko scene ${escapeHtml(item.scene_number || "")}">
-                </div>
-                <div class="generated-image-actions">
-                    <button type="button" class="visual-prompt-copy regenerate-image">Regenerate</button>
-                    <a class="visual-prompt-copy download-generated-image"
-                       download="miko-scene-${String(item.scene_number || 1).padStart(2, "0")}.jpg"
-                       href="${result.data_uri}">Download</a>
-                </div>
-            `;
-
-            preview.querySelector(".regenerate-image")?.addEventListener("click", async (event) => {
-                await generateSceneImage(item, event.currentTarget);
-            });
-        }
-
-        setApiStatus("ok", `Scene ${item.scene_number || ""} image ready`);
-        return result;
-    } catch (error) {
-        console.error("Image generation failed:", error);
-        showError(`Scene ${item.scene_number || ""} image failed: ${error.message}`);
-        setApiStatus("error", "Image generation failed");
-        return null;
-    } finally {
-        if (button) {
-            button.disabled = false;
-            button.textContent = originalText;
-        }
-    }
-}
-
-async function generateAllSceneImages(scenes, button) {
-    if (!Array.isArray(scenes) || !scenes.length) return;
-
-    const originalText = button?.textContent || "Generate All";
-    if (button) {
-        button.disabled = true;
-        button.textContent = "Generating 1/5...";
-    }
-
-    let completed = 0;
-
-    try {
-        for (const item of scenes) {
-            const temporaryButton = document.querySelector(
-                `[data-generate-visual="${scenes.indexOf(item)}"]`
-            );
-
-            const result = await generateSceneImage(
-                item,
-                temporaryButton || button
-            );
-
-            if (result?.success) completed += 1;
-
-            if (button && completed < scenes.length) {
-                button.textContent = `Generating ${completed + 1}/${scenes.length}...`;
-            }
-        }
-
-        if (completed === scenes.length) {
-            setApiStatus("ok", "All scene images ready");
-        } else {
-            setApiStatus("error", `${completed}/${scenes.length} images ready`);
-        }
-    } finally {
-        if (button) {
-            button.disabled = false;
-            button.textContent = originalText;
-        }
-    }
-}
-
 function renderVisualPrompts(result) {
     lastVisualPrompts = result;
 
@@ -467,11 +346,10 @@ function renderVisualPrompts(result) {
         <div class="visual-prompts-header">
             <div>
                 <h3>🎨 Visual Prompts</h3>
-                <p>${scenes.length} scene image prompts · true 9:16 · 576×1024</p>
+                <p>${scenes.length} scene image prompts · 9:16 · 1080×1920</p>
             </div>
             <div class="visual-prompts-actions">
                 <button type="button" id="copyAllVisualPrompts">Copy All</button>
-                <button type="button" id="generateAllVisualImages">✨ Generate All Images</button>
                 <button type="button" id="downloadVisualPrompts">Download</button>
             </div>
         </div>
@@ -489,11 +367,6 @@ function renderVisualPrompts(result) {
                                 class="visual-prompt-copy"
                                 data-copy-visual="${index}"
                             >Copy Prompt</button>
-                            <button
-                                type="button"
-                                class="visual-prompt-copy"
-                                data-generate-visual="${index}"
-                            >Generate Image</button>
                         </div>
                     </div>
 
@@ -515,7 +388,7 @@ function renderVisualPrompts(result) {
         </div>
 
         <div class="visual-prompt-status">
-            Image generation is connected. Images are generated as true 9:16 vertical frames (576×1024) for Shorts.
+            Image generation is not connected yet. These prompts are ready for the next provider stage.
         </div>
     `;
 
@@ -571,18 +444,6 @@ function renderVisualPrompts(result) {
             console.error(error);
             showError("Clipboard access is unavailable in this browser.");
         }
-    });
-
-    panel.querySelectorAll("[data-generate-visual]").forEach((button) => {
-        button.addEventListener("click", async () => {
-            const index = Number(button.dataset.generateVisual);
-            const item = scenes[index];
-            await generateSceneImage(item, button);
-        });
-    });
-
-    panel.querySelector("#generateAllVisualImages")?.addEventListener("click", async (event) => {
-        await generateAllSceneImages(scenes, event.currentTarget);
     });
 
     panel.querySelector("#downloadVisualPrompts")?.addEventListener("click", () => {
@@ -789,7 +650,7 @@ async function generateStory(event) {
                 );
             }
 
-            renderVisualPrompts(visualResult);
+            renderVisualPromptsV4(visualResult);
             setApiStatus("ok", "Story + visual prompts ready");
         } catch (promptError) {
             console.error("Visual prompt generation failed:", promptError);
@@ -913,6 +774,7 @@ function bindEvents() {
 
 async function init() {
     bindEvents();
+    installMikoReferenceUIV4();
 
     if (!localStorage.getItem(CONFIG.storageKey) && CONFIG.defaultWorkerUrl) {
         localStorage.setItem(CONFIG.storageKey, CONFIG.defaultWorkerUrl);
@@ -933,3 +795,672 @@ async function init() {
 
 
 init();
+
+/* ============================================================
+   MIKO CHARACTER CONSISTENCY + IMAGE GENERATION PATCH V4
+   ============================================================
+   This patch is designed for the current visual-prompt UI.
+   It:
+   1. Requires a Miko master reference image.
+   2. Resizes it below 512x512.
+   3. Sends it to /images/generate.
+   4. Uses FLUX.2 Klein 4B reference-image generation.
+   5. Requests 576x1024 (true 9:16).
+   6. Adds Generate Image / Regenerate / Download.
+   ============================================================ */
+
+const MIKO_REFERENCE_KEY = "miko_master_reference_image_v1";
+
+function getMikoReference() {
+    return localStorage.getItem(MIKO_REFERENCE_KEY) || "";
+}
+
+function saveMikoReference(dataUrl) {
+    localStorage.setItem(MIKO_REFERENCE_KEY, dataUrl);
+}
+
+function removeMikoReference() {
+    localStorage.removeItem(MIKO_REFERENCE_KEY);
+}
+
+function mikoReferenceCss() {
+    if (document.getElementById("mikoReferenceCssV4")) return;
+
+    const style = document.createElement("style");
+    style.id = "mikoReferenceCssV4";
+    style.textContent = `
+        .miko-reference-panel-v4 {
+            margin: 0 0 18px;
+            padding: 20px;
+            border: 1px solid rgba(167,139,250,.28);
+            border-radius: 20px;
+            background: radial-gradient(circle at top right, rgba(139,92,246,.10), transparent 32%), rgba(15,23,42,.82);
+            box-shadow: 0 16px 45px rgba(0,0,0,.22);
+        }
+
+        .miko-reference-head-v4 {
+            display:flex;
+            align-items:flex-start;
+            justify-content:space-between;
+            gap:14px;
+            flex-wrap:wrap;
+        }
+
+        .miko-reference-eyebrow-v4 {
+            color:#a78bfa;
+            font-size:10px;
+            font-weight:900;
+            letter-spacing:.12em;
+        }
+
+        .miko-reference-head-v4 h3 {
+            margin:4px 0;
+        }
+
+        .miko-reference-head-v4 p {
+            margin:0;
+            color:#94a3b8;
+            font-size:11px;
+        }
+
+        .miko-ref-status-v4 {
+            padding:6px 9px;
+            border-radius:999px;
+            font-size:10px;
+            font-weight:800;
+        }
+
+        .miko-ref-missing-v4 {
+            color:#fecdd3;
+            background:rgba(251,113,133,.08);
+            border:1px solid rgba(251,113,133,.22);
+        }
+
+        .miko-ref-ready-v4 {
+            color:#bbf7d0;
+            background:rgba(52,211,153,.08);
+            border:1px solid rgba(52,211,153,.22);
+        }
+
+        .miko-reference-body-v4 {
+            display:grid;
+            grid-template-columns:150px 1fr;
+            gap:16px;
+            margin-top:15px;
+        }
+
+        .miko-reference-preview-v4 {
+            width:150px;
+            height:150px;
+            overflow:hidden;
+            display:grid;
+            place-items:center;
+            border:1px solid rgba(255,255,255,.10);
+            border-radius:15px;
+            background:rgba(2,6,23,.6);
+        }
+
+        .miko-reference-preview-v4 img {
+            width:100%;
+            height:100%;
+            object-fit:contain;
+        }
+
+        .miko-reference-empty-v4 {
+            display:flex;
+            flex-direction:column;
+            gap:5px;
+            align-items:center;
+            color:#94a3b8;
+            font-size:10px;
+            text-align:center;
+        }
+
+        .miko-reference-empty-v4 strong {
+            color:#ddd6fe;
+            font-size:18px;
+        }
+
+        .miko-reference-controls-v4 {
+            display:flex;
+            align-items:flex-start;
+            align-content:flex-start;
+            gap:9px;
+            flex-wrap:wrap;
+        }
+
+        .miko-upload-v4 {
+            display:inline-flex;
+            align-items:center;
+            min-height:40px;
+            padding:9px 13px;
+            border:1px solid rgba(167,139,250,.35);
+            border-radius:11px;
+            color:white;
+            background:rgba(139,92,246,.15);
+            cursor:pointer;
+            font-size:12px;
+            font-weight:800;
+        }
+
+        .miko-reference-controls-v4 p {
+            flex-basis:100%;
+            margin:0;
+            color:#64748b;
+            font-size:10px;
+        }
+
+        .image-generate-button-v4 {
+            min-height:34px;
+            padding:7px 11px;
+            border:1px solid rgba(56,189,248,.22);
+            border-radius:9px;
+            color:#dbeafe;
+            background:rgba(56,189,248,.07);
+            cursor:pointer;
+            font-size:10px;
+            font-weight:800;
+        }
+
+        .image-generate-button-v4:hover {
+            background:rgba(56,189,248,.14);
+            border-color:rgba(56,189,248,.38);
+        }
+
+        .image-generate-button-v4:disabled {
+            opacity:.55;
+            cursor:not-allowed;
+        }
+
+        .generated-image-v4 {
+            margin-top:12px;
+            padding-top:12px;
+            border-top:1px solid rgba(255,255,255,.07);
+        }
+
+        .generated-image-v4 img {
+            display:block;
+            width:min(100%, 320px);
+            height:auto;
+            max-height:560px;
+            object-fit:contain;
+            border-radius:13px;
+            border:1px solid rgba(255,255,255,.10);
+            background:#020617;
+        }
+
+        .generated-image-meta-v4 {
+            display:flex;
+            gap:7px;
+            flex-wrap:wrap;
+            margin-top:8px;
+            color:#94a3b8;
+            font-size:10px;
+        }
+
+        .generated-image-actions-v4 {
+            display:flex;
+            gap:7px;
+            flex-wrap:wrap;
+            margin-top:8px;
+        }
+
+        .generated-image-actions-v4 button {
+            min-height:32px;
+            padding:6px 10px;
+            border:1px solid rgba(255,255,255,.10);
+            border-radius:9px;
+            color:#e5e7eb;
+            background:rgba(255,255,255,.045);
+            cursor:pointer;
+            font-size:10px;
+            font-weight:700;
+        }
+
+        .image-generating-v4 {
+            margin-top:10px;
+            color:#a78bfa;
+            font-size:10px;
+            font-weight:800;
+        }
+
+        @media (max-width:560px) {
+            .miko-reference-body-v4 {
+                grid-template-columns:1fr;
+            }
+
+            .miko-reference-preview-v4 {
+                width:140px;
+                height:140px;
+            }
+        }
+    `;
+    document.head.appendChild(style);
+}
+
+function renderMikoReferenceV4() {
+    const preview = document.getElementById("mikoReferencePreviewV4");
+    const status = document.getElementById("mikoReferenceStatusV4");
+    if (!preview || !status) return;
+
+    const reference = getMikoReference();
+
+    if (!reference) {
+        preview.innerHTML = `
+            <div class="miko-reference-empty-v4">
+                <strong>🐱 MIKO</strong>
+                <span>Master cat reference</span>
+            </div>
+        `;
+        status.textContent = "● Reference required";
+        status.className = "miko-ref-status-v4 miko-ref-missing-v4";
+        return;
+    }
+
+    preview.innerHTML = `<img src="${reference}" alt="Miko master reference">`;
+    status.textContent = "● Miko cat reference ready";
+    status.className = "miko-ref-status-v4 miko-ref-ready-v4";
+}
+
+function resizeMikoReferenceV4(dataUrl) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+
+        img.onload = () => {
+            // Cloudflare FLUX.2 Klein reference images must be smaller than 512x512.
+            const maxDimension = 480;
+            const scale = Math.min(
+                maxDimension / img.width,
+                maxDimension / img.height,
+                1
+            );
+
+            const canvas = document.createElement("canvas");
+            canvas.width = Math.max(1, Math.round(img.width * scale));
+            canvas.height = Math.max(1, Math.round(img.height * scale));
+
+            const ctx = canvas.getContext("2d");
+            if (!ctx) {
+                reject(new Error("Could not prepare Miko reference image."));
+                return;
+            }
+
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+            resolve(canvas.toDataURL("image/png"));
+        };
+
+        img.onerror = () => reject(new Error("Could not read Miko reference image."));
+        img.src = dataUrl;
+    });
+}
+
+function installMikoReferenceUIV4() {
+    mikoReferenceCss();
+
+    if (document.getElementById("mikoReferencePanelV4")) {
+        renderMikoReferenceV4();
+        return;
+    }
+
+    const panel = document.createElement("section");
+    panel.id = "mikoReferencePanelV4";
+    panel.className = "miko-reference-panel-v4";
+
+    panel.innerHTML = `
+        <div class="miko-reference-head-v4">
+            <div>
+                <div class="miko-reference-eyebrow-v4">CHARACTER LOCK</div>
+                <h3>🐱 Miko Master Reference</h3>
+                <p>
+                    This image is the identity reference for every generated scene.
+                    Miko must remain a cat.
+                </p>
+            </div>
+            <span id="mikoReferenceStatusV4" class="miko-ref-status-v4 miko-ref-missing-v4">
+                ● Reference required
+            </span>
+        </div>
+
+        <div class="miko-reference-body-v4">
+            <div id="mikoReferencePreviewV4" class="miko-reference-preview-v4">
+                <div class="miko-reference-empty-v4">
+                    <strong>🐱 MIKO</strong>
+                    <span>Master cat reference</span>
+                </div>
+            </div>
+
+            <div class="miko-reference-controls-v4">
+                <label class="miko-upload-v4">
+                    Upload Miko Reference
+                    <input
+                        id="mikoReferenceFileV4"
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        hidden
+                    >
+                </label>
+
+                <button type="button" id="clearMikoReferenceV4" class="btn-secondary">
+                    Clear
+                </button>
+
+                <p>
+                    Use a clean full-body image of Miko as a cat:
+                    orange-white fur + blue hoodie. The same reference is reused
+                    for every scene.
+                </p>
+            </div>
+        </div>
+    `;
+
+    const target =
+        document.querySelector("#storyForm")?.parentElement ||
+        document.querySelector("main") ||
+        document.body;
+
+    target.insertBefore(panel, target.firstChild);
+
+    document.getElementById("mikoReferenceFileV4")?.addEventListener("change", async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+            showError("Miko reference must be PNG, JPEG, or WebP.");
+            return;
+        }
+
+        try {
+            const source = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(String(reader.result || ""));
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+
+            const resized = await resizeMikoReferenceV4(source);
+            saveMikoReference(resized);
+            renderMikoReferenceV4();
+            clearError();
+        } catch (error) {
+            console.error(error);
+            showError(error.message || "Could not prepare Miko reference.");
+        }
+    });
+
+    document.getElementById("clearMikoReferenceV4")?.addEventListener("click", () => {
+        removeMikoReference();
+        renderMikoReferenceV4();
+    });
+
+    renderMikoReferenceV4();
+}
+
+async function generateMikoImageV4(item, button, imageContainer) {
+    const reference = getMikoReference();
+
+    if (!reference) {
+        throw new Error(
+            "Miko Master Reference is required. Upload the Miko cat reference first."
+        );
+    }
+
+    const original = button.textContent;
+    button.disabled = true;
+    button.textContent = "Generating...";
+
+    if (imageContainer) {
+        imageContainer.innerHTML = `<div class="image-generating-v4">🎨 Generating Miko...</div>`;
+    }
+
+    try {
+        const result = await fetchJson("/images/generate", {
+            method: "POST",
+            timeoutMs: 120000,
+            body: JSON.stringify({
+                prompt: item.prompt || "",
+                negative_prompt: item.negative_prompt || "",
+                reference_image: reference,
+                width: 576,
+                height: 1024,
+                scene_number: item.scene_number || null
+            })
+        });
+
+        if (!result?.success || !result?.image) {
+            throw new Error(result?.error || "Image generation returned no image.");
+        }
+
+        if (imageContainer) {
+            imageContainer.innerHTML = `
+                <div class="generated-image-v4">
+                    <img
+                        src="${result.image}"
+                        alt="Generated Miko Scene ${escapeHtml(item.scene_number || "")}"
+                    >
+                    <div class="generated-image-meta-v4">
+                        <span>🐱 Miko CAT LOCK</span>
+                        <span>•</span>
+                        <span>${escapeHtml(result.aspect_ratio || "9:16")}</span>
+                        <span>•</span>
+                        <span>${escapeHtml(result.resolution || "576x1024")}</span>
+                        <span>•</span>
+                        <span>Reference ON</span>
+                    </div>
+                    <div class="generated-image-actions-v4">
+                        <button type="button" data-regenerate-image>Regenerate</button>
+                        <button type="button" data-download-image>Download</button>
+                    </div>
+                </div>
+            `;
+
+            imageContainer.querySelector("[data-regenerate-image]")?.addEventListener(
+                "click",
+                () => generateMikoImageV4(item, button, imageContainer)
+            );
+
+            imageContainer.querySelector("[data-download-image]")?.addEventListener(
+                "click",
+                () => {
+                    const anchor = document.createElement("a");
+                    anchor.href = result.image;
+                    anchor.download = `miko-scene-${String(item.scene_number || 1).padStart(2, "0")}.png`;
+                    document.body.appendChild(anchor);
+                    anchor.click();
+                    anchor.remove();
+                }
+            );
+        }
+
+        return result;
+    } finally {
+        button.disabled = false;
+        button.textContent = original;
+    }
+}
+
+/*
+   Replace your existing renderVisualPrompts() with this version if you want
+   the image buttons integrated directly into each scene card.
+*/
+function renderVisualPromptsV4(result) {
+    lastVisualPrompts = result;
+
+    const scenes = Array.isArray(result?.prompts) ? result.prompts : [];
+    if (!scenes.length) return;
+
+    ensureVisualPromptStyles();
+
+    let panel = document.getElementById("visualPromptsPanel");
+
+    if (!panel) {
+        panel = document.createElement("section");
+        panel.id = "visualPromptsPanel";
+        panel.className = "visual-prompts-panel";
+
+        const anchor = els.sceneList?.closest("section, .card, .panel") || els.sceneList;
+
+        if (anchor?.parentNode) {
+            anchor.parentNode.insertBefore(panel, anchor.nextSibling);
+        } else if (els.storyResult) {
+            els.storyResult.appendChild(panel);
+        }
+    }
+
+    panel.innerHTML = `
+        <div class="visual-prompts-header">
+            <div>
+                <h3>🎨 Visual Prompts + Miko Images</h3>
+                <p>${scenes.length} scenes · Miko reference locked · 9:16 · 576×1024</p>
+            </div>
+
+            <div class="visual-prompts-actions">
+                <button type="button" id="copyAllVisualPrompts">Copy All</button>
+                <button type="button" id="downloadVisualPrompts">Download</button>
+            </div>
+        </div>
+
+        <div id="visualPromptList">
+            ${scenes.map((item, index) => `
+                <article class="visual-prompt-card">
+                    <div class="visual-prompt-card-head">
+                        <div class="visual-prompt-number">
+                            SCENE ${String(item.scene_number ?? index + 1).padStart(2, "0")}
+                        </div>
+
+                        <div class="visual-prompts-actions">
+                            <button
+                                type="button"
+                                class="visual-prompt-copy"
+                                data-copy-visual="${index}"
+                            >Copy Prompt</button>
+
+                            <button
+                                type="button"
+                                class="image-generate-button-v4"
+                                data-generate-image="${index}"
+                            >🐱 Generate Image</button>
+                        </div>
+                    </div>
+
+                    <div class="visual-prompt-meta">
+                        <span>9:16</span>
+                        <span>•</span>
+                        <span>576×1024</span>
+                        <span>•</span>
+                        <span>${escapeHtml(item.world_lock || "Miko World")}</span>
+                    </div>
+
+                    <div class="visual-prompt-label">Image Prompt</div>
+                    <div class="visual-prompt-text">${escapeHtml(item.prompt || "—")}</div>
+
+                    <div class="visual-prompt-label">Negative Prompt</div>
+                    <div class="visual-prompt-text visual-prompt-negative">${escapeHtml(item.negative_prompt || "—")}</div>
+
+                    <div id="generatedImage-${index}"></div>
+                </article>
+            `).join("")}
+        </div>
+
+        <div class="visual-prompt-status">
+            🐱 Every image uses the same Miko Master Reference.
+            Miko is locked as a cat.
+        </div>
+    `;
+
+    panel.querySelectorAll("[data-copy-visual]").forEach((button) => {
+        button.addEventListener("click", async () => {
+            const index = Number(button.dataset.copyVisual);
+            const item = scenes[index];
+            if (!item) return;
+
+            const content = [
+                `SCENE ${String(item.scene_number ?? index + 1).padStart(2, "0")}`,
+                "",
+                "IMAGE PROMPT:",
+                item.prompt || "",
+                "",
+                "NEGATIVE PROMPT:",
+                item.negative_prompt || ""
+            ].join("\n");
+
+            try {
+                await navigator.clipboard.writeText(content);
+                const original = button.textContent;
+                button.textContent = "Copied!";
+                setTimeout(() => { button.textContent = original; }, 1000);
+            } catch (error) {
+                console.error(error);
+                showError("Clipboard access is unavailable in this browser.");
+            }
+        });
+    });
+
+    panel.querySelectorAll("[data-generate-image]").forEach((button) => {
+        button.addEventListener("click", async () => {
+            const index = Number(button.dataset.generateImage);
+            const item = scenes[index];
+            const imageContainer = document.getElementById(`generatedImage-${index}`);
+
+            if (!item) return;
+
+            try {
+                clearError();
+                await generateMikoImageV4(item, button, imageContainer);
+            } catch (error) {
+                console.error("Miko image generation failed:", error);
+                if (imageContainer) {
+                    imageContainer.innerHTML = "";
+                }
+                showError(error.message || "Miko image generation failed.");
+            }
+        });
+    });
+
+    panel.querySelector("#copyAllVisualPrompts")?.addEventListener("click", async () => {
+        const content = scenes.map((item, index) => [
+            `SCENE ${String(item.scene_number ?? index + 1).padStart(2, "0")}`,
+            "",
+            "IMAGE PROMPT:",
+            item.prompt || "",
+            "",
+            "NEGATIVE PROMPT:",
+            item.negative_prompt || "",
+            "",
+            "----------------------------------------",
+            ""
+        ].join("\n")).join("\n");
+
+        try {
+            await navigator.clipboard.writeText(content);
+            const button = panel.querySelector("#copyAllVisualPrompts");
+            const original = button.textContent;
+            button.textContent = "Copied!";
+            setTimeout(() => { button.textContent = original; }, 1000);
+        } catch (error) {
+            console.error(error);
+            showError("Clipboard access is unavailable in this browser.");
+        }
+    });
+
+    panel.querySelector("#downloadVisualPrompts")?.addEventListener("click", () => {
+        const blob = new Blob(
+            [JSON.stringify(result, null, 2)],
+            { type: "application/json" }
+        );
+
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = "miko-visual-prompts.json";
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+    });
+}
+
+function initMikoConsistencyV4() {
+    installMikoReferenceUIV4();
+}
+
