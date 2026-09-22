@@ -5,7 +5,8 @@ import binascii
 import json
 from typing import Any, Optional
 
-from js import Blob, FormData, Response, Uint8Array
+from js import Blob, FormData, Response
+from pyodide.ffi import to_js
 
 
 MODEL = "@cf/black-forest-labs/flux-2-klein-4b"
@@ -89,9 +90,14 @@ def _decode_data_uri(value: str) -> tuple[bytes, str]:
         ) from exc
 
 
-def _bytes_to_uint8(data: bytes):
-    # Pyodide FFI: construct a JavaScript Uint8Array from Python bytes.
-    return Uint8Array.new(data)
+def _bytes_to_blob(data: bytes, mime: str):
+    """Convert Python bytes into a native JS Blob through Pyodide FFI."""
+    # Cloudflare/Pyodide documents to_js() as the supported Python ->
+    # JavaScript conversion. A Python list becomes a native JS Array and
+    # bytes become a JavaScript TypedArray. This avoids the Blob constructor
+    # type mismatch seen with manually constructed Array/Uint8Array objects.
+    parts = to_js([data])
+    return Blob.new(parts, {"type": mime})
 
 
 async def _run_flux2_with_reference(
@@ -107,7 +113,7 @@ async def _run_flux2_with_reference(
     FLUX.2 Klein 4B uses multipart input on Workers AI.
     The reference image is sent as input_image_0.
     """
-    blob = Blob.new([_bytes_to_uint8(reference_bytes)], {"type": reference_mime})
+    blob = _bytes_to_blob(reference_bytes, reference_mime)
 
     form = FormData.new()
     form.append("prompt", prompt)
@@ -153,7 +159,7 @@ def _extract_image(result: Any) -> Optional[str]:
 
 
 class ImageGenerationEngine:
-    version = "0.4.0"
+    version = "0.4.2"
     provider = "cloudflare-workers-ai"
     model = MODEL
 
